@@ -680,22 +680,16 @@ final class CompanionManager: ObservableObject {
     ) async throws {
         report.modeUsed = "Agent"
 
-        // Unfamiliar app → quick web research first, shown in the drawer beside the buddy.
+        // Unfamiliar app → quick web research first. The plan only feeds the agent's
+        // prompt; the user sees a caption, never the sources or the step list.
         var researchNotes: ResearchNotes?
         if ResearchAgent.needsResearch(for: task) {
             presentCaption("researching how to do that…")
-            drawingLayerModel.show([.footnoteDrawer(id: "research", lines: ["researching: \(task)", "searching the web for the steps…"])],
-                                   geometry: firstScreenAnalysis.capture.geometry, autoClearAfterSeconds: 120)
             let researchStartedAt = Date()
             researchNotes = try? await researchAgent.research(task: task)
             report.planSeconds += Date().timeIntervalSince(researchStartedAt)
             if let notes = researchNotes, !notes.steps.isEmpty {
-                var lines = ["plan for: \(task)"] + notes.steps.enumerated().map { "\($0.offset + 1). \($0.element)" }
-                if !notes.sourceTitles.isEmpty { lines.append("sources: " + notes.sourceTitles.joined(separator: " · ")) }
-                drawingLayerModel.show([.footnoteDrawer(id: "research", lines: lines)], geometry: firstScreenAnalysis.capture.geometry, autoClearAfterSeconds: 120)
                 presentCaption("got a plan, \(notes.steps.count) steps…")
-            } else {
-                drawingLayerModel.clearImmediately()
             }
         }
         try Task.checkCancellation()
@@ -735,9 +729,10 @@ final class CompanionManager: ObservableObject {
             } else {
                 stepPrimitives = []
             }
-            let stepLog = history.suffix(4).map { String($0.prefix(60)) } + ["→ \(action.narration)"]
-            drawingLayerModel.show(stepPrimitives + [.footnoteDrawer(id: "agent-log", lines: ["agent · step \(stepNumber)"] + stepLog)],
-                                   geometry: screenAnalysis.capture.geometry, autoClearAfterSeconds: 30)
+            // Only the element highlight is drawn; the step narration goes to the caption.
+            if !stepPrimitives.isEmpty {
+                drawingLayerModel.show(stepPrimitives, geometry: screenAnalysis.capture.geometry, autoClearAfterSeconds: 30)
+            }
 
             let historyEntry = await agentModePipeline.execute(action, elements: screenAnalysis.elements, geometry: screenAnalysis.capture.geometry)
             history.append("\(stepNumber). \(historyEntry)")
@@ -745,8 +740,8 @@ final class CompanionManager: ObservableObject {
 
             try? await Task.sleep(nanoseconds: AgentModePipeline.settleDelayNanoseconds(after: action))
             try Task.checkCancellation()
-            // Our own drawings are excluded from capture, but clear anyway so the log
-            // drawer never overlaps an element the next screenshot needs.
+            // Our own drawings are excluded from capture, but clear anyway so a
+            // highlight never overlaps an element the next screenshot needs.
             drawingLayerModel.clearImmediately()
             try? await Task.sleep(nanoseconds: 40_000_000)
             screenAnalysis = try await makeScreenAnalysisTask().value
