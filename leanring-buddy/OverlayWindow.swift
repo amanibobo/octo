@@ -290,32 +290,18 @@ struct BlueCursorView: View {
                     }
             }
 
-            // Caption: what the buddy is saying, revealed word by word. The bubble
-            // hugs the text (narrow for a short phrase, wrapping at 380pt) and its
-            // size change animates instead of jumping.
+            // Caption: what the buddy is saying, revealed word by word. ViewThatFits
+            // keeps a short phrase on one hugging line and wraps a long one at the
+            // bubble's maximum width, growing downward; size changes animate.
             if buddyIsVisibleOnThisScreen && !companionManager.captionText.isEmpty {
-                Text(companionManager.captionText)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.white)
-                    .lineSpacing(2)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: 380, alignment: .leading)
-                    .fixedSize()
-                    .padding(.horizontal, 11)
-                    .padding(.vertical, 8)
-                    .background(
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .fill(Color.black.opacity(0.82))
-                            .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(DS.Colors.overlayCursorBlue.opacity(0.8), lineWidth: 1))
-                            .shadow(color: Color.black.opacity(0.35), radius: 10, x: 0, y: 4)
-                    )
+                captionBubble
                     .overlay(
                         GeometryReader { geo in
                             Color.clear.preference(key: CaptionBubbleSizePreferenceKey.self, value: geo.size)
                         }
                     )
-                    .position(captionBubblePosition)
+                    .frame(width: captionMaximumWidth, alignment: captionAlignsTrailing ? .trailing : .leading)
+                    .position(captionOuterFramePosition)
                     .animation(.spring(response: 0.25, dampingFraction: 0.75, blendDuration: 0), value: cursorPosition)
                     .animation(.spring(response: 0.22, dampingFraction: 0.85, blendDuration: 0), value: captionBubbleSize)
                     .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .topLeading)))
@@ -450,20 +436,52 @@ struct BlueCursorView: View {
         }
     }
 
-    /// Caption sits below-right of the buddy, flipping to the left / above when it
-    /// would run off the screen.
-    private var captionBubblePosition: CGPoint {
-        let width = max(captionBubbleSize.width, 40)
-        let height = max(captionBubbleSize.height, 20)
-        var x = cursorPosition.x + 14 + width / 2
-        var y = cursorPosition.y + 26 + height / 2
-        if x + width / 2 > screenFrame.width - 12 {
-            x = cursorPosition.x - 14 - width / 2
+    private let captionMaximumWidth: CGFloat = 380
+
+    private var captionText: some View {
+        Text(companionManager.captionText)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundColor(.white)
+            .lineSpacing(2)
+            .multilineTextAlignment(.leading)
+    }
+
+    /// Hugs a one-line phrase; otherwise wraps at the maximum width and grows in height.
+    private var captionBubble: some View {
+        ViewThatFits(in: .horizontal) {
+            captionText
+                .fixedSize()
+            captionText
+                .frame(width: captionMaximumWidth - 22, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
         }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(Color.black.opacity(0.82))
+                .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(DS.Colors.overlayCursorBlue.opacity(0.8), lineWidth: 1))
+                .shadow(color: Color.black.opacity(0.35), radius: 10, x: 0, y: 4)
+        )
+    }
+
+    /// The bubble flips to the buddy's left when it would run off the right edge.
+    private var captionAlignsTrailing: Bool {
+        cursorPosition.x + 14 + max(captionBubbleSize.width, 40) > screenFrame.width - 12
+    }
+
+    /// Position of the invisible fixed-width frame that holds the bubble. The bubble
+    /// is leading- or trailing-aligned inside it so its near edge hugs the buddy.
+    private var captionOuterFramePosition: CGPoint {
+        let height = max(captionBubbleSize.height, 20)
+        let x = captionAlignsTrailing
+            ? cursorPosition.x - 14 - captionMaximumWidth / 2
+            : cursorPosition.x + 14 + captionMaximumWidth / 2
+        var y = cursorPosition.y + 26 + height / 2
         if y + height / 2 > screenFrame.height - 12 {
             y = cursorPosition.y - 26 - height / 2
         }
-        return CGPoint(x: max(width / 2 + 12, x), y: max(height / 2 + 12, y))
+        return CGPoint(x: x, y: max(height / 2 + 12, y))
     }
 
     /// Whether the buddy triangle should be visible on this screen.

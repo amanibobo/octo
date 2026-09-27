@@ -164,13 +164,11 @@ final class CompanionManager: ObservableObject {
         switch SounderConfiguration.speechOutputProvider {
         case "elevenlabs":
             let elevenLabsClient = ElevenLabsTTSClient(proxyURL: "\(workerBaseURL)/tts")
-            elevenLabsClient.prefetch(DataModePipeline.fillerPhrases)
             self.speechOutput = elevenLabsClient
         case "system":
             self.speechOutput = SystemSpeechOutputClient()
         default:
             let kokoroClient = KokoroTTSClient(ttsBaseURL: SounderConfiguration.ttsServiceBaseURL)
-            kokoroClient.prefetch(DataModePipeline.fillerPhrases)
             self.speechOutput = kokoroClient
         }
 
@@ -699,11 +697,6 @@ final class CompanionManager: ObservableObject {
         report.modeUsed = "Data"
         report.analysisTask = plan.task?.rawValue
 
-        // Speak a filler right away so the user hears something within a second.
-        if !isRerunAfterEdit {
-            presentCaption(plan.fillerText + "…")
-            try? await speechOutput.speakText(plan.fillerText)
-        }
 
         // Confidence gate: low OCR confidence → get the exact values from the clipboard.
         var table = extractedTable
@@ -765,8 +758,6 @@ final class CompanionManager: ObservableObject {
         report: inout SounderInteractionReport
     ) async throws {
         report.modeUsed = "Agent"
-        presentCaption("on it…")
-        try? await speechOutput.speakText(AgentModePipeline.fillerPhrase)
 
         // Unfamiliar app → quick web research first, shown in the drawer beside the buddy.
         var researchNotes: ResearchNotes?
@@ -870,7 +861,6 @@ final class CompanionManager: ObservableObject {
         switch resolvedIntent {
         case .evidence(let conditionQuery):
             report.analysisTask = "evidence"
-            if !isRerunAfterEdit { presentCaption("pulling the latest evidence…"); try? await speechOutput.speakText("pulling the latest evidence") }
             // Circling a single drug and asking "what's new on this?" scopes the evidence to it.
             let circledDrug = (regionOfInterest != nil && reading.medications.count == 1) ? reading.medications[0].name : nil
             outcome = try await clinicalModePipeline.evidence(reading: reading, conditionQuery: conditionQuery, drug: circledDrug)
@@ -880,7 +870,6 @@ final class CompanionManager: ObservableObject {
                 try await speak("i see diagnoses but no medication list on this screen.")
                 return
             }
-            if !isRerunAfterEdit { presentCaption("checking the med list…"); try? await speechOutput.speakText("checking the med list") }
             outcome = try await clinicalModePipeline.checkMedications(reading: reading)
         }
         report.analysisSeconds = Date().timeIntervalSince(analysisStartedAt)
@@ -921,9 +910,6 @@ final class CompanionManager: ObservableObject {
         report: inout SounderInteractionReport
     ) async throws {
         report.modeUsed = regionOfInterest == nil ? "General" : "General (circled)"
-        // Instant (pre-synthesized) so the wait for the vision model is not silent.
-        presentCaption("let me look…")
-        try? await speechOutput.speakText("let me look")
         let answerStartedAt = Date()
         let answer = try await generalModePipeline.answer(
             transcript: transcript,
