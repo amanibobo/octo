@@ -186,7 +186,9 @@ final class CompanionManager: ObservableObject {
         startServiceHealthPolling()
         // Vision's first text request loads models (several seconds). Pay it now, off-main.
         Task.detached(priority: .utility) {
+            let startedAt = Date()
             ScreenTextRecognizer.warmUp()
+            print("👁️ Vision OCR warmed up in \(String(format: "%.2f", Date().timeIntervalSince(startedAt)))s")
         }
         bindVoiceStateObservation()
         bindAudioPowerLevel()
