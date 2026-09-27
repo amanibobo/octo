@@ -290,16 +290,20 @@ struct BlueCursorView: View {
                     }
             }
 
-            // Caption: what the buddy is saying, revealed at speaking pace.
+            // Caption: what the buddy is saying, revealed word by word. The bubble
+            // hugs the text (narrow for a short phrase, wrapping at 380pt) and its
+            // size change animates instead of jumping.
             if buddyIsVisibleOnThisScreen && !companionManager.captionText.isEmpty {
                 Text(companionManager.captionText)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.white)
                     .lineSpacing(2)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: 380, alignment: .leading)
+                    .fixedSize()
                     .padding(.horizontal, 11)
                     .padding(.vertical, 8)
-                    .frame(maxWidth: 380, alignment: .leading)
-                    .fixedSize(horizontal: true, vertical: true)
                     .background(
                         RoundedRectangle(cornerRadius: 9, style: .continuous)
                             .fill(Color.black.opacity(0.82))
@@ -313,6 +317,8 @@ struct BlueCursorView: View {
                     )
                     .position(captionBubblePosition)
                     .animation(.spring(response: 0.25, dampingFraction: 0.75, blendDuration: 0), value: cursorPosition)
+                    .animation(.spring(response: 0.22, dampingFraction: 0.85, blendDuration: 0), value: captionBubbleSize)
+                    .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .topLeading)))
                     .onPreferenceChange(CaptionBubbleSizePreferenceKey.self) { newSize in
                         captionBubbleSize = newSize
                     }

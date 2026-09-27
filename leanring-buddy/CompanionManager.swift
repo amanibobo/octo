@@ -70,8 +70,8 @@ final class CompanionManager: ObservableObject {
     private var captionRevealProgress: Double = 0
     private var captionRevealTimer: Timer?
     private var captionHideTask: Task<Void, Never>?
-    private static let captionCharactersPerSecond: Double = 15
-    private static let captionRevealTicksPerSecond: Double = 30
+    private static let captionWordsPerSecond: Double = 2.8
+    private static let captionRevealTicksPerSecond: Double = 20
 
     /// Spatial context: cursor positions (global AppKit coords) sampled while the
     /// hotkey is held. Drawn as a trail by the overlay; the bounding box becomes
@@ -995,13 +995,20 @@ final class CompanionManager: ObservableObject {
         captionRevealProgress = 0
         captionText = ""
 
+        // Reveal whole words so the bubble grows in readable steps rather than jittering per letter.
+        let words = text.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
         captionRevealTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / Self.captionRevealTicksPerSecond, repeats: true) { [weak self] timer in
             Task { @MainActor [weak self] in
                 guard let self else { timer.invalidate(); return }
-                self.captionRevealProgress += Self.captionCharactersPerSecond / Self.captionRevealTicksPerSecond
-                let revealedCount = min(self.captionFullText.count, Int(self.captionRevealProgress))
-                self.captionText = String(self.captionFullText.prefix(revealedCount))
-                if revealedCount >= self.captionFullText.count {
+                self.captionRevealProgress += Self.captionWordsPerSecond / Self.captionRevealTicksPerSecond
+                let revealedWordCount = min(words.count, Int(self.captionRevealProgress))
+                let revealedText = words.prefix(revealedWordCount).joined(separator: " ")
+                if revealedText != self.captionText {
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        self.captionText = revealedText
+                    }
+                }
+                if revealedWordCount >= words.count {
                     timer.invalidate()
                     self.scheduleCaptionHide()
                 }
@@ -1028,7 +1035,9 @@ final class CompanionManager: ObservableObject {
         captionHideTask?.cancel()
         captionHideTask = nil
         captionFullText = ""
-        captionText = ""
+        withAnimation(.easeOut(duration: 0.25)) {
+            captionText = ""
+        }
     }
 
     // MARK: - Spatial context (circle gesture)
