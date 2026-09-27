@@ -9,8 +9,8 @@ CLAUDE_MODEL = "claude-opus-5-5"
 # Must support image input + JSON-schema output. kimi-k3-fast measured ~1.3s per call.
 FIREWORKS_CHAT_MODEL = "accounts/fireworks/routers/kimi-k3-fast"
 FIREWORKS_TRANSCRIPTION_MODEL = "whisper-v3-turbo"
-# ElevenLabs voice: "River - Relaxed, Neutral, Informative" (default library voice). Used when ELEVENLABS_API_KEY is set.
-ELEVENLABS_VOICE_ID = "SAz9YHcvj6GT2YYXdXww"
+# ElevenLabs voice: "Savvy - Warm, Grounded & Natural" (library voice, added to the account). Used when ELEVENLABS_API_KEY is set.
+ELEVENLABS_VOICE_ID = "ogwqBH5bbF03DSbNiRNN"
 # Optional: URL of the deployed Python analysis service (Modal). When set, the
 # Worker proxies /analysis/* to it. Leave empty when the app talks to a local backend.
 ANALYSIS_BACKEND_URL = ""
