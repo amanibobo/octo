@@ -2,14 +2,13 @@
 //  NotchPanelManager.swift
 //  leanring-buddy
 //
-//  Sounder lives in the MacBook notch. A borderless, non-activating panel sits
-//  exactly over the notch (black, so it disappears into it) and shows the buddy's
-//  face and voice state; hovering or clicking it unfurls the full control panel
-//  beneath the notch, like a dynamic island. Macs without a notch keep the menu
-//  bar dropdown (MenuBarPanelManager).
-//
-//  Geometry comes from NSScreen: `safeAreaInsets.top` is the notch height and the
-//  gap between `auxiliaryTopLeftArea` and `auxiliaryTopRightArea` is its width.
+//  Sounder lives in the MacBook notch. Following DynamicNotch's recipe: one
+//  large transparent canvas panel pinned to the top-centre of the notch screen,
+//  the island drawn in SwiftUI inside it, expansion as an animated SwiftUI size
+//  change (the window itself never resizes), and the window delegated to a
+//  SkyLight space so it renders above the menu bar. Hovering the notch expands
+//  the island; leaving it, or clicking anywhere else, collapses it. Macs without
+//  a notch keep the menu bar dropdown (MenuBarPanelManager).
 //
 
 import AppKit
@@ -20,41 +19,42 @@ extension Notification.Name {
     static let sounderToggleNotch = Notification.Name("sounderToggleNotch")
 }
 
-/// Panel that may become key so the panel's toggles and buttons take clicks,
-/// but never activates the app (the user's frontmost app keeps focus).
-private final class NotchPanel: NSPanel {
+/// Can become key so toggles and buttons in the card take clicks, but is a
+/// non-activating panel so the user's frontmost app keeps focus.
+private final class NotchCanvasPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
-    /// AppKit normally clamps windows below the menu bar. The island must sit
+    /// AppKit normally clamps windows below the menu bar. The canvas must sit
     /// flush with the top edge, over the notch, so the clamp is disabled.
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
         frameRect
     }
 }
 
-@MainActor
-final class NotchState: ObservableObject {
-    @Published var isExpanded = false
-    @Published var isHovering = false
+/// Lets the first click on a control land without a preceding activation click.
+private final class NotchHostingView: NSHostingView<NotchIslandView> {
+    override var acceptsFirstResponder: Bool { true }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
 @MainActor
 final class NotchPanelManager {
     private let companionManager: CompanionManager
-    private let notchState = NotchState()
-    private var panel: NotchPanel?
-    private var hostingView: NSHostingView<NotchRootView>?
+    private let islandState = NotchIslandState()
+    private var panel: NotchCanvasPanel?
+    private var hostingView: NotchHostingView?
     private var hoverTimer: Timer?
+    private var expandWorkItem: DispatchWorkItem?
     private var collapseWorkItem: DispatchWorkItem?
-    private var toggleObserver: NSObjectProtocol?
-    private var dismissObserver: NSObjectProtocol?
-    private var screenChangeObserver: NSObjectProtocol?
+    private var outsideClickMonitor: Any?
+    private var notificationObservers: [NSObjectProtocol] = []
 
-    private static let expandedWidth: CGFloat = 420
-    /// How far the collapsed island extends beyond the notch on each side and below it.
-    private static let collapsedExtraWidth: CGFloat = 6
-    private static let collapsedExtraHeight: CGFloat = 0
+    /// Transparent canvas the island is drawn in; large enough for the expanded card.
+    private static let canvasSize = CGSize(width: 640, height: 720)
+    /// Brief dwell so sweeping the pointer across the top edge does not open the island.
+    private static let hoverExpandDelay: TimeInterval = 0.10
+    private static let hoverCollapseDelay: TimeInterval = 0.55
 
     /// The built-in display with a notch, if the Mac has one.
     static func notchScreen() -> NSScreen? {
@@ -62,40 +62,44 @@ final class NotchPanelManager {
     }
 
     init?(companionManager: CompanionManager) {
-        guard Self.notchScreen() != nil else { return nil }
+        guard let screen = Self.notchScreen() else { return nil }
         self.companionManager = companionManager
+        applyNotchMetrics(from: screen)
         createPanel()
         startHoverTracking()
+        installOutsideClickMonitor()
 
-        toggleObserver = NotificationCenter.default.addObserver(forName: .sounderToggleNotch, object: nil, queue: .main) { [weak self] _ in
+        notificationObservers.append(NotificationCenter.default.addObserver(forName: .sounderToggleNotch, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor [weak self] in self?.toggle() }
-        }
-        dismissObserver = NotificationCenter.default.addObserver(forName: .clickyDismissPanel, object: nil, queue: .main) { [weak self] _ in
+        })
+        notificationObservers.append(NotificationCenter.default.addObserver(forName: .clickyDismissPanel, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor [weak self] in self?.setExpanded(false) }
-        }
-        screenChangeObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.layoutPanel(animated: false) }
-        }
+        })
+        notificationObservers.append(NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.layoutPanel() }
+        })
     }
 
     deinit {
         hoverTimer?.invalidate()
-        for observer in [toggleObserver, dismissObserver, screenChangeObserver].compactMap({ $0 }) {
-            NotificationCenter.default.removeObserver(observer)
-        }
+        if let outsideClickMonitor { NSEvent.removeMonitor(outsideClickMonitor) }
+        for observer in notificationObservers { NotificationCenter.default.removeObserver(observer) }
     }
 
     func toggle() {
-        setExpanded(!notchState.isExpanded)
+        setExpanded(!islandState.isExpanded)
     }
 
     func setExpanded(_ expanded: Bool) {
-        guard notchState.isExpanded != expanded else { return }
+        expandWorkItem?.cancel()
+        expandWorkItem = nil
         collapseWorkItem?.cancel()
-        withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
-            notchState.isExpanded = expanded
+        collapseWorkItem = nil
+        guard islandState.isExpanded != expanded else { return }
+        withAnimation(NotchIslandState.springAnimation) {
+            islandState.isExpanded = expanded
+            if !expanded { islandState.isShowingSettings = false }
         }
-        layoutPanel(animated: true)
         if expanded {
             panel?.makeKey()
         } else {
@@ -105,258 +109,146 @@ final class NotchPanelManager {
 
     // MARK: - Panel
 
+    /// Notch height is `safeAreaInsets.top`; its width is the gap between the two
+    /// auxiliary top areas (the menu bar halves on either side of the camera).
+    private func applyNotchMetrics(from screen: NSScreen) {
+        let leftArea = screen.auxiliaryTopLeftArea ?? .zero
+        let rightArea = screen.auxiliaryTopRightArea ?? .zero
+        islandState.notchWidth = max(120, rightArea.minX - leftArea.maxX)
+        islandState.notchHeight = screen.safeAreaInsets.top
+    }
+
     private func createPanel() {
-        let rootView = NotchRootView(companionManager: companionManager, notchState: notchState, onToggle: { [weak self] in self?.toggle() })
-        let hosting = NSHostingView(rootView: rootView)
+        let rootView = NotchIslandView(companionManager: companionManager, state: islandState, onToggle: { [weak self] in self?.toggle() })
+        let hosting = NotchHostingView(rootView: rootView)
         hosting.wantsLayer = true
         hosting.layer?.backgroundColor = .clear
 
-        let notchPanel = NotchPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 200, height: 40),
+        let canvas = NotchCanvasPanel(
+            contentRect: NSRect(origin: .zero, size: Self.canvasSize),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
-        // Same recipe as NotchDrop / boring.notch: a level well above the status
-        // bar lets the window overlap the menu bar strip and the notch itself.
-        notchPanel.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 8)
-        notchPanel.isOpaque = false
-        notchPanel.backgroundColor = .clear
-        notchPanel.hasShadow = false
-        notchPanel.hidesOnDeactivate = false
-        notchPanel.isExcludedFromWindowsMenu = true
-        notchPanel.titleVisibility = .hidden
-        notchPanel.titlebarAppearsTransparent = true
-        notchPanel.isMovable = false
-        notchPanel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
-        notchPanel.contentView = hosting
-        notchPanel.isMovableByWindowBackground = false
+        canvas.isReleasedWhenClosed = false
+        canvas.isFloatingPanel = true
+        canvas.isOpaque = false
+        canvas.backgroundColor = .clear
+        canvas.hidesOnDeactivate = false
+        canvas.isMovable = false
+        canvas.isMovableByWindowBackground = false
+        canvas.hasShadow = false
+        canvas.animationBehavior = .none
+        // Above the menu bar strip so the island can overlap the notch itself.
+        canvas.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue + 3)
+        canvas.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
+        canvas.acceptsMouseMovedEvents = true
+        canvas.isExcludedFromWindowsMenu = true
+        canvas.titleVisibility = .hidden
+        canvas.titlebarAppearsTransparent = true
+        canvas.contentView = hosting
 
-        panel = notchPanel
+        panel = canvas
         hostingView = hosting
-        layoutPanel(animated: false)
-        notchPanel.orderFrontRegardless()
+        layoutPanel()
+        canvas.orderFrontRegardless()
+        SkyLightOperator.shared.delegateWindow(canvas)
     }
 
-    private func layoutPanel(animated: Bool) {
+    /// The canvas is pinned to the top-centre of the notch screen. SwiftUI lays
+    /// the island out at the top of the canvas, so the window never moves or resizes.
+    private func layoutPanel() {
         guard let panel, let screen = Self.notchScreen() else { return }
-        let notchHeight = screen.safeAreaInsets.top
+        applyNotchMetrics(from: screen)
         let leftArea = screen.auxiliaryTopLeftArea ?? .zero
-        let rightArea = screen.auxiliaryTopRightArea ?? .zero
-        let notchWidth = max(120, rightArea.minX - leftArea.maxX)
-        let notchCenterX = leftArea.maxX + notchWidth / 2
+        let notchCenterX = leftArea.maxX + islandState.notchWidth / 2
+        let frame = NSRect(
+            x: floor(notchCenterX - Self.canvasSize.width / 2),
+            y: screen.frame.maxY - Self.canvasSize.height + 1,
+            width: Self.canvasSize.width,
+            height: Self.canvasSize.height
+        )
+        panel.setFrame(frame, display: true)
+        print("🏝️ notch canvas \(frame.integral) · notch \(Int(islandState.notchWidth))×\(Int(islandState.notchHeight)) at x \(Int(leftArea.maxX)) · level \(panel.level.rawValue) · skylight \(SkyLightOperator.shared.isAvailable)")
+    }
 
-        let size: CGSize
-        if notchState.isExpanded {
-            let contentHeight = hostingView?.fittingSize.height ?? 420
-            size = CGSize(width: Self.expandedWidth, height: max(contentHeight, notchHeight + 200))
+    /// Screen rect (global AppKit coordinates) the island currently occupies.
+    private var islandScreenRect: CGRect {
+        guard let panel, let screen = Self.notchScreen() else { return .zero }
+        let islandSize: CGSize
+        if islandState.isExpanded {
+            let fittingHeight = hostingView?.fittingSize.height ?? 0
+            islandSize = CGSize(width: NotchIslandState.expandedWidth, height: max(fittingHeight, 260))
         } else {
-            size = CGSize(width: notchWidth + Self.collapsedExtraWidth, height: notchHeight + Self.collapsedExtraHeight)
+            islandSize = islandState.collapsedSize
         }
-        let frame = NSRect(x: notchCenterX - size.width / 2, y: screen.frame.maxY - size.height, width: size.width, height: size.height)
-
-        if animated {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.28
-                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                panel.animator().setFrame(frame, display: true)
-            }
-        } else {
-            panel.setFrame(frame, display: true)
-        }
-        print("🏝️ notch panel: requested \(frame.integral) actual \(panel.frame.integral) screen \(screen.frame.integral) notch \(Int(notchWidth))×\(Int(notchHeight)) at x \(Int(leftArea.maxX)) level \(panel.level.rawValue)")
+        return CGRect(
+            x: panel.frame.midX - islandSize.width / 2,
+            y: screen.frame.maxY - islandSize.height,
+            width: islandSize.width,
+            height: islandSize.height
+        )
     }
 
     // MARK: - Hover
 
     /// Expands when the pointer parks on the notch, collapses a moment after it leaves.
     private func startHoverTracking() {
-        hoverTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 20.0, repeats: true) { [weak self] _ in
+        hoverTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in self?.updateHover() }
         }
     }
 
     private func updateHover() {
-        guard let panel else { return }
-        let mouse = NSEvent.mouseLocation
-        // Generous hover zone: the notch itself plus the menu-bar strip just around
-        // and below it, so brushing the top of the screen near the notch opens it.
-        let hoverZone = notchState.isExpanded
-            ? panel.frame.insetBy(dx: -10, dy: -10)
-            : panel.frame.insetBy(dx: -24, dy: 0).offsetBy(dx: 0, dy: -18).union(panel.frame)
-        let inside = hoverZone.contains(mouse)
-        if inside != notchState.isHovering {
-            notchState.isHovering = inside
+        let mouseLocation = NSEvent.mouseLocation
+        let islandRect = islandScreenRect
+        // Collapsed: the notch plus the menu-bar strip just around and below it, so
+        // brushing the top of the screen near the notch opens it. Expanded: the card.
+        let hoverZone = islandState.isExpanded
+            ? islandRect.insetBy(dx: -10, dy: -10)
+            : islandRect.insetBy(dx: -30, dy: 0).union(islandRect.offsetBy(dx: 0, dy: -16))
+        let isInside = hoverZone.contains(mouseLocation)
+        if isInside != islandState.isHovering {
+            islandState.isHovering = isInside
         }
-        if inside {
+
+        if isInside {
             collapseWorkItem?.cancel()
             collapseWorkItem = nil
-            if !notchState.isExpanded {
-                // A brief dwell, so passing the pointer across the top edge does not open it.
+            if !islandState.isExpanded, expandWorkItem == nil {
                 let workItem = DispatchWorkItem { [weak self] in
-                    guard let self, self.notchState.isHovering else { return }
-                    self.setExpanded(true)
+                    guard let self else { return }
+                    self.expandWorkItem = nil
+                    if self.islandState.isHovering { self.setExpanded(true) }
+                }
+                expandWorkItem = workItem
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.hoverExpandDelay, execute: workItem)
+            }
+        } else {
+            expandWorkItem?.cancel()
+            expandWorkItem = nil
+            // The settings page stays open until the user clicks away or presses back.
+            if islandState.isExpanded, collapseWorkItem == nil, !islandState.isShowingSettings {
+                let workItem = DispatchWorkItem { [weak self] in
+                    guard let self else { return }
+                    self.collapseWorkItem = nil
+                    if !self.islandState.isHovering { self.setExpanded(false) }
                 }
                 collapseWorkItem = workItem
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: workItem)
-            }
-        } else if notchState.isExpanded, collapseWorkItem == nil {
-            let workItem = DispatchWorkItem { [weak self] in
-                guard let self, !self.notchState.isHovering else { return }
-                self.setExpanded(false)
-            }
-            collapseWorkItem = workItem
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.9, execute: workItem)
-        }
-    }
-}
-
-// MARK: - SwiftUI
-
-/// Black island hanging from the notch: collapsed shows the buddy's eyes and
-/// voice state; expanded shows the full control panel.
-struct NotchRootView: View {
-    @ObservedObject var companionManager: CompanionManager
-    @ObservedObject var notchState: NotchState
-    let onToggle: () -> Void
-
-    var body: some View {
-        VStack(spacing: 0) {
-            if notchState.isExpanded {
-                Group {
-                    if companionManager.hasCompletedOnboarding && companionManager.allPermissionsGranted {
-                        NotchPanelContentView(companionManager: companionManager)
-                    } else {
-                        // Setup flow (permissions, Start) reuses the menu bar panel's rows.
-                        CompanionPanelView(companionManager: companionManager, isEmbeddedInNotch: true)
-                    }
-                }
-                .padding(.top, notchHeight)
-                .transition(.opacity.combined(with: .move(edge: .top)))
-            } else {
-                collapsedContent
-                    .frame(height: notchHeight)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .background(
-            NotchShape(cornerRadius: notchState.isExpanded ? 20 : 12)
-                .fill(Color.black)
-                .shadow(color: Color.black.opacity(notchState.isExpanded ? 0.45 : 0), radius: 18, x: 0, y: 8)
-        )
-        .contentShape(Rectangle())
-        .onTapGesture { onToggle() }
-        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: notchState.isExpanded)
-    }
-
-    private var notchHeight: CGFloat {
-        NotchPanelManager.notchScreen()?.safeAreaInsets.top ?? 38
-    }
-
-    /// Eyes when idle, waveform while listening, a pulse while thinking, bouncing eyes while talking.
-    private var collapsedContent: some View {
-        HStack(spacing: 6) {
-            switch companionManager.voiceState {
-            case .listening:
-                NotchWaveform(audioPowerLevel: companionManager.currentAudioPowerLevel)
-            case .processing:
-                NotchPulse()
-            case .idle, .responding:
-                NotchEyes(isTalking: companionManager.voiceState == .responding, isHovering: notchState.isHovering)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 4)
-    }
-}
-
-/// Rounded-bottom rectangle that meets the screen edge flush at the top.
-struct NotchShape: Shape {
-    var cornerRadius: CGFloat
-    var animatableData: CGFloat {
-        get { cornerRadius }
-        set { cornerRadius = newValue }
-    }
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - cornerRadius))
-        path.addQuadCurve(to: CGPoint(x: rect.maxX - cornerRadius, y: rect.maxY), control: CGPoint(x: rect.maxX, y: rect.maxY))
-        path.addLine(to: CGPoint(x: rect.minX + cornerRadius, y: rect.maxY))
-        path.addQuadCurve(to: CGPoint(x: rect.minX, y: rect.maxY - cornerRadius), control: CGPoint(x: rect.minX, y: rect.maxY))
-        path.closeSubpath()
-        return path
-    }
-}
-
-private struct NotchEyes: View {
-    let isTalking: Bool
-    let isHovering: Bool
-    @State private var isBlinking = false
-
-    var body: some View {
-        HStack(spacing: 10) {
-            eye
-            eye
-        }
-        .scaleEffect(isHovering ? 1.15 : 1)
-        .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isHovering)
-        .task {
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: UInt64.random(in: 2_400_000_000...4_800_000_000))
-                isBlinking = true
-                try? await Task.sleep(nanoseconds: 130_000_000)
-                isBlinking = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.hoverCollapseDelay, execute: workItem)
             }
         }
     }
 
-    private var eye: some View {
-        RoundedRectangle(cornerRadius: 2.5, style: .continuous)
-            .fill(DS.Colors.overlayCursorBlue)
-            .frame(width: 7, height: isTalking ? 10 : 8)
-            .scaleEffect(x: 1, y: isBlinking ? 0.12 : 1, anchor: .center)
-            .animation(.easeInOut(duration: 0.07), value: isBlinking)
-            .animation(.easeInOut(duration: 0.18).repeatForever(autoreverses: true), value: isTalking)
-    }
-}
-
-private struct NotchWaveform: View {
-    let audioPowerLevel: CGFloat
-    private let profile: [CGFloat] = [0.5, 0.8, 1.0, 0.8, 0.5]
-
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
-            HStack(spacing: 3) {
-                ForEach(0..<5, id: \.self) { index in
-                    RoundedRectangle(cornerRadius: 1.5, style: .continuous)
-                        .fill(DS.Colors.overlayCursorBlue)
-                        .frame(width: 3, height: barHeight(index: index, date: context.date))
+    /// Clicking anywhere outside the island collapses it.
+    private func installOutsideClickMonitor() {
+        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.islandState.isExpanded else { return }
+                if !self.islandScreenRect.insetBy(dx: -8, dy: -8).contains(NSEvent.mouseLocation) {
+                    self.setExpanded(false)
                 }
             }
         }
-    }
-
-    private func barHeight(index: Int, date: Date) -> CGFloat {
-        let phase = CGFloat(date.timeIntervalSinceReferenceDate * 4) + CGFloat(index) * 0.5
-        let reactive = min(audioPowerLevel * 2.8, 1) * 14 * profile[index]
-        return 4 + reactive + (sin(phase) + 1) * 1.5
-    }
-}
-
-private struct NotchPulse: View {
-    @State private var isPulsing = false
-
-    var body: some View {
-        Circle()
-            .fill(DS.Colors.overlayCursorBlue)
-            .frame(width: 10, height: 10)
-            .scaleEffect(isPulsing ? 1.35 : 0.8)
-            .opacity(isPulsing ? 0.6 : 1)
-            .onAppear {
-                withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) { isPulsing = true }
-            }
     }
 }

@@ -44,16 +44,44 @@ final class ResearchAgent {
         return mentionsAnApp && !mentionsFamiliarApp
     }
 
+    struct MediaRequest {
+        let query: String
+        let preferredKind: MediaCard.Kind?
+    }
+
+    private static let mediaVerbs = ["show me", "show us", "pull up", "bring up", "find me", "find a", "find an", "find the", "look up", "get me", "can you find", "can you show", "could you find", "could you show", "search for", "google", "is there a", "i want to see", "let me see"]
+    private static let mediaNouns: [(noun: String, kind: MediaCard.Kind)] = [
+        ("paper", .paper), ("papers", .paper), ("study", .paper), ("studies", .paper), ("trial", .paper), ("article", .paper), ("research on", .paper), ("evidence", .paper), ("guideline", .paper), ("publication", .paper),
+        ("image", .image), ("picture", .image), ("photo", .image), ("diagram", .image), ("figure", .image), ("illustration", .image), ("chart of", .image), ("what does", .image),
+        ("video", .video), ("clip", .video), ("youtube", .video), ("tutorial", .video), ("lecture", .video),
+        ("link", .link), ("website", .link), ("page", .link), ("documentation", .link), ("docs for", .link)
+    ]
+
+    /// Detects "show me a paper on…", "pull up a video of…", "find a picture of…"
+    /// in any mode. Returns nil for ordinary questions so they route as before.
+    static func mediaRequest(in transcript: String) -> MediaRequest? {
+        let lowered = transcript.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard mediaVerbs.contains(where: { lowered.contains($0) }) else { return nil }
+        guard let matchedNoun = mediaNouns.first(where: { lowered.contains($0.noun) }) else { return nil }
+        // "what does X look like" reads as an image request even without a verb match above.
+        return MediaRequest(query: transcript, preferredKind: matchedNoun.kind)
+    }
+
     /// Finds one relevant paper, image or video for a query with web search and
     /// returns it as a card. The model answers in a fixed one-line format so no
-    /// second structured call is needed.
-    func findMedia(query: String, preferredKind: MediaCard.Kind?) async throws -> MediaCard {
+    /// second structured call is needed. `screenContext` is OCR text from the
+    /// user's screen so "a paper about this" resolves to what they are looking at.
+    func findMedia(query: String, preferredKind: MediaCard.Kind?, screenContext: String?) async throws -> MediaCard {
         let kindHint = preferredKind.map { "the user wants a \($0.rawValue)." } ?? "pick the most useful kind: a paper (pubmed, doi, arxiv), a video (youtube), or an image."
+        var userContent = "the user said: \"\(query)\""
+        if let screenContext, !screenContext.isEmpty {
+            userContent += "\n\ntext currently on their screen, for context when they say \"this\" or \"that\": \(screenContext.prefix(1500))"
+        }
         let requestBody: [String: Any] = [
-            "max_tokens": 300,
-            "system": "you find one authoritative, directly relevant resource on the web. \(kindHint) reply with exactly one line and nothing else, in this format: KIND | TITLE | URL | SOURCE | IMAGE_URL. KIND is paper, image, video or link. SOURCE is the journal/site and year. IMAGE_URL is a direct image url when the kind is image (or a figure/thumbnail if you have one), otherwise the word none. the URL must be one you actually found.",
-            "tools": [["type": "web_search_20250305", "name": "web_search", "max_uses": 3]],
-            "messages": [["role": "user", "content": query]]
+            "max_tokens": 400,
+            "system": "you find one authoritative, directly relevant resource on the web for what the user asked to see. \(kindHint) reply with exactly one line and nothing else, in this format: KIND | TITLE | URL | SOURCE | IMAGE_URL. KIND is paper, image, video or link. SOURCE is the journal/site and year. IMAGE_URL is a direct image url (ending in .jpg, .png, .webp or .gif) when the kind is image, or a figure/thumbnail if you have one, otherwise the word none. the URL must be one you actually found in search results; for a paper prefer pubmed, doi.org, nejm, jama, thelancet or arxiv; for a video prefer youtube.",
+            "tools": [["type": "web_search_20250305", "name": "web_search", "max_uses": 4]],
+            "messages": [["role": "user", "content": userContent]]
         ]
         var request = URLRequest(url: claudeURL)
         request.httpMethod = "POST"
@@ -67,6 +95,7 @@ final class ResearchAgent {
             throw ClaudeChatError(message: "media lookup failed")
         }
         let text = contentBlocks.compactMap { ($0["type"] as? String) == "text" ? $0["text"] as? String : nil }.joined(separator: "\n")
+        print("🖼️ media lookup raw: \(text.replacingOccurrences(of: "\n", with: " ⏎ ").prefix(300))")
         guard let line = text.split(separator: "\n").map({ $0.trimmingCharacters(in: .whitespaces) }).last(where: { $0.contains(" | ") }) else {
             throw ClaudeChatError(message: "media lookup returned no result line")
         }

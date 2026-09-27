@@ -14,7 +14,7 @@ import Foundation
 import Speech
 
 enum BuddyPushToTalkShortcut {
-    enum ShortcutOption {
+    enum ShortcutOption: String, CaseIterable {
         case shiftFunction
         case controlOption
         case shiftControl
@@ -92,10 +92,25 @@ enum BuddyPushToTalkShortcut {
         case keyUp
     }
 
-    static let currentShortcutOption: ShortcutOption = .controlOption
+    private static let selectedShortcutDefaultsKey = "sounderPushToTalkShortcut"
+
+    /// The user's push-to-talk chord, chosen in the notch settings. Read on every
+    /// event so a change applies immediately without restarting the event tap.
+    static var currentShortcutOption: ShortcutOption {
+        get {
+            guard let storedRawValue = UserDefaults.standard.string(forKey: selectedShortcutDefaultsKey),
+                  let storedOption = ShortcutOption(rawValue: storedRawValue) else {
+                return .controlOption
+            }
+            return storedOption
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: selectedShortcutDefaultsKey)
+        }
+    }
     static let pushToTalkKeyCode: UInt16 = 49 // Space
-    static let pushToTalkDisplayText = currentShortcutOption.displayText
-    static let pushToTalkTooltipText = "push to talk (\(pushToTalkDisplayText))"
+    static var pushToTalkDisplayText: String { currentShortcutOption.displayText }
+    static var pushToTalkTooltipText: String { "push to talk (\(pushToTalkDisplayText))" }
 
     static func shortcutTransition(
         for event: NSEvent,

@@ -3,14 +3,16 @@
 //  leanring-buddy
 //
 //  The card that unfurls from the notch. Deliberately sparse: one status line,
-//  one mode control, one hint, three status dots, the last run, a small row of
-//  toggles. Everything secondary lives in tooltips.
+//  one mode control with a one-line description of the chosen mode, the last
+//  run, and a footer with the hotkey hint and a settings button. Everything
+//  else lives in NotchSettingsView.
 //
 
 import SwiftUI
 
 struct NotchPanelContentView: View {
     @ObservedObject var companionManager: CompanionManager
+    let onOpenSettings: () -> Void
 
     private let horizontalPadding: CGFloat = 20
 
@@ -24,9 +26,7 @@ struct NotchPanelContentView: View {
             modeControl
                 .padding(.horizontal, horizontalPadding)
 
-            Text("Hold ⌃ ⌥ and talk. Circle with the cursor to focus.")
-                .font(.system(size: 12.5))
-                .foregroundColor(.white.opacity(0.45))
+            modeDescription
                 .padding(.horizontal, horizontalPadding)
                 .padding(.top, 12)
 
@@ -43,7 +43,7 @@ struct NotchPanelContentView: View {
                 .padding(.horizontal, horizontalPadding - 6)
                 .padding(.vertical, 10)
         }
-        .frame(width: 420)
+        .frame(width: NotchIslandState.expandedWidth)
     }
 
     // MARK: - Pieces
@@ -60,7 +60,7 @@ struct NotchPanelContentView: View {
             Spacer()
             HStack(spacing: 6) {
                 serviceDot(isHealthy: companionManager.isWorkerReachable, label: "Claude")
-                serviceDot(isHealthy: companionManager.isAnalysisServiceReachable, label: "Models")
+                serviceDot(isHealthy: companionManager.isAnalysisServiceReachable, label: "Clinical rules")
                 serviceDot(isHealthy: true, label: "Voice · \(companionManager.buddyDictationManager.transcriptionProviderDisplayName)")
             }
             Text(statusText)
@@ -86,7 +86,11 @@ struct NotchPanelContentView: View {
         HStack(spacing: 2) {
             ForEach(SounderMode.allCases) { mode in
                 let isSelected = companionManager.selectedMode == mode
-                Button(action: { companionManager.setSelectedMode(mode) }) {
+                Button(action: {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        companionManager.setSelectedMode(mode)
+                    }
+                }) {
                     Text(mode.displayName)
                         .font(.system(size: 12.5, weight: isSelected ? .semibold : .medium))
                         .foregroundColor(isSelected ? .black : .white.opacity(0.7))
@@ -103,6 +107,23 @@ struct NotchPanelContentView: View {
         }
         .padding(3)
         .background(Capsule().fill(Color.white.opacity(0.08)))
+    }
+
+    /// One sentence on what the selected mode does, plus an example question.
+    private var modeDescription: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(companionManager.selectedMode.explanation)
+                .font(.system(size: 12.5))
+                .foregroundColor(.white.opacity(0.7))
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Try: \u{201C}\(companionManager.selectedMode.exampleQuestion)\u{201D}")
+                .font(.system(size: 11.5))
+                .foregroundColor(.white.opacity(0.4))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .id(companionManager.selectedMode)
+        .transition(.opacity.combined(with: .move(edge: .top)))
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var hairline: some View {
@@ -139,7 +160,7 @@ struct NotchPanelContentView: View {
                 }
             }
         } else {
-            Text("Nothing yet. Try \u{201C}what's on my screen?\u{201D}")
+            Text("Nothing yet. Hold the hotkey and ask \u{201C}what's on my screen?\u{201D}")
                 .font(.system(size: 12))
                 .foregroundColor(.white.opacity(0.4))
         }
@@ -147,43 +168,33 @@ struct NotchPanelContentView: View {
 
     private var footer: some View {
         HStack(spacing: 6) {
-            footerToggle(icon: "doc.on.clipboard", label: "Clipboard fallback", isOn: companionManager.isClipboardFallbackEnabled) {
-                companionManager.setClipboardFallbackEnabled(!companionManager.isClipboardFallbackEnabled)
+            HStack(spacing: 4) {
+                ForEach(companionManager.pushToTalkShortcut.keyCapsuleLabels, id: \.self) { keyLabel in
+                    Text(keyLabel)
+                        .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                        .foregroundColor(.white.opacity(0.7))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Color.white.opacity(0.1)))
+                }
+                Text("hold to talk · circle to focus")
+                    .font(.system(size: 11.5))
+                    .foregroundColor(.white.opacity(0.4))
+                    .padding(.leading, 4)
             }
-            footerToggle(icon: "waveform", label: "On-device transcription", isOn: companionManager.isOfflineVoiceEnabled) {
-                companionManager.setOfflineVoiceEnabled(!companionManager.isOfflineVoiceEnabled)
-            }
-            footerToggle(icon: "cursorarrow", label: "Show buddy", isOn: companionManager.isClickyCursorEnabled) {
-                companionManager.setClickyCursorEnabled(!companionManager.isClickyCursorEnabled)
-            }
-            footerToggle(icon: "scope", label: "Calibrate overlay", isOn: false) {
-                companionManager.runOverlayCalibration()
-            }
+            .padding(.leading, 6)
             Spacer()
-            Button(action: { NSApp.terminate(nil) }) {
-                Image(systemName: "power")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.white.opacity(0.45))
-                    .frame(width: 26, height: 26)
+            Button(action: onOpenSettings) {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white.opacity(0.6))
+                    .frame(width: 30, height: 28)
+                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(0.08)))
             }
             .buttonStyle(.plain)
             .pointerCursor()
-            .help("Quit Sounder")
+            .help("Settings · hotkey, voice, buddy")
         }
-    }
-
-    /// Icon-only so the row never truncates; the label lives in the tooltip.
-    private func footerToggle(icon: String, label: String, isOn: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(isOn ? .white : .white.opacity(0.45))
-                .frame(width: 30, height: 28)
-                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(isOn ? Color.white.opacity(0.14) : Color.clear))
-        }
-        .buttonStyle(.plain)
-        .pointerCursor()
-        .help(label + (isOn ? " · on" : ""))
     }
 
     private var statusText: String {

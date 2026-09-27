@@ -119,9 +119,6 @@ final class ClinicalModePipeline {
             let drugNames = mentions.map(\.name).joined(separator: " + ")
             footnotes.append("\(footnoteNumber). \(drugNames) (\(finding.severity)): \(finding.message) — \(finding.reference)")
         }
-        if !footnotes.isEmpty {
-            primitives.append(.footnoteDrawer(id: "footnotes", lines: footnotes))
-        }
 
         let metricText = "\(response.findings.count) findings · \(response.interactionsChecked) pairs checked · eGFR \(response.egfrUsed.map { String(format: "%.0f", $0) } ?? "n/a") (\(response.egfrSource ?? "none"))"
         let spokenText = await narrate(question: question, reading: reading, findings: response, footnotes: footnotes, isScopedToCircle: isScopedToCircle)
@@ -162,9 +159,6 @@ final class ClinicalModePipeline {
         }
         for item in sponsored {
             footnotes.append("Sponsored medical information (\(item.source)): \(item.title). Disclosed, opt-in.")
-        }
-        if !footnotes.isEmpty {
-            primitives.append(.footnoteDrawer(id: "footnotes", lines: footnotes))
         }
 
         let metricText = "\(trials.count) trials · source \(response.source)\(sponsored.isEmpty ? "" : " · 1 sponsored slot")"

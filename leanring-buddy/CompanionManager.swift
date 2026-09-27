@@ -196,6 +196,31 @@ final class CompanionManager: ObservableObject {
         UserDefaults.standard.set(isEnabled, forKey: "sounderClipboardFallbackEnabled")
     }
 
+    /// Push-to-talk chord. Stored on BuddyPushToTalkShortcut (read by the event tap
+    /// on every event) and mirrored here so the settings UI can observe it.
+    @Published private(set) var pushToTalkShortcut: BuddyPushToTalkShortcut.ShortcutOption = BuddyPushToTalkShortcut.currentShortcutOption
+
+    func setPushToTalkShortcut(_ shortcutOption: BuddyPushToTalkShortcut.ShortcutOption) {
+        BuddyPushToTalkShortcut.currentShortcutOption = shortcutOption
+        pushToTalkShortcut = shortcutOption
+        print("⌨️ push-to-talk shortcut → \(shortcutOption.displayText)")
+    }
+
+    /// Whether spoken answers are also shown as a caption beside the buddy.
+    @Published private(set) var isCaptionEnabled: Bool = UserDefaults.standard.object(forKey: "sounderCaptionEnabled") == nil
+        ? true
+        : UserDefaults.standard.bool(forKey: "sounderCaptionEnabled")
+
+    func setCaptionEnabled(_ isEnabled: Bool) {
+        isCaptionEnabled = isEnabled
+        UserDefaults.standard.set(isEnabled, forKey: "sounderCaptionEnabled")
+        if !isEnabled { clearCaption() }
+    }
+
+    var chatModelDisplayName: String {
+        SounderConfiguration.chatModel ?? SounderConfiguration.chatProvider
+    }
+
     func setOfflineVoiceEnabled(_ isEnabled: Bool) {
         isOfflineVoiceEnabled = isEnabled
         UserDefaults.standard.set(isEnabled, forKey: "sounderOfflineVoiceEnabled")
@@ -576,7 +601,15 @@ final class CompanionManager: ObservableObject {
             report.ocrSeconds = screenAnalysis.ocrSeconds
             print("👁️ \(textLines.count) OCR lines, \(elements.count) elements")
 
-            // 3. Route. Tasks first ("open spotify and play…"), then Rx, then General.
+            // 3. Route. "show me a paper / picture / video of…" works in every mode and
+            // is checked first, before "pull up" or "find" can read as an Agent task.
+            if let mediaRequest = ResearchAgent.mediaRequest(in: transcript) {
+                try await runMediaLookup(request: mediaRequest, textLines: textLines, report: &report)
+                finishReport(&report, startedAt: interactionStartedAt)
+                return
+            }
+
+            // Tasks next ("open spotify and play…"), then Rx, then General.
             let shouldRunAgentMode = selectedMode == .agent
                 || (selectedMode == .automatic && AgentModePipeline.looksLikeTask(transcript))
             if shouldRunAgentMode {
@@ -610,6 +643,34 @@ final class CompanionManager: ObservableObject {
             finishReport(&report, startedAt: interactionStartedAt)
             try? await speak(Self.spokenErrorMessage(for: error))
         }
+    }
+
+    /// Looks up one paper, image, video or link with web search and holds the card
+    /// up next to the buddy. Screen text goes along as context so "a paper about
+    /// this" resolves to what is on screen.
+    private func runMediaLookup(
+        request: ResearchAgent.MediaRequest,
+        textLines: [RecognizedTextLine],
+        report: inout SounderInteractionReport
+    ) async throws {
+        report.modeUsed = "Media"
+        report.analysisTask = "media"
+        presentCaption("finding that…")
+        let screenContext = textLines.prefix(40).map(\.text).joined(separator: " · ")
+        let lookupStartedAt = Date()
+        let card = try await researchAgent.findMedia(query: request.query, preferredKind: request.preferredKind, screenContext: screenContext)
+        report.analysisSeconds = Date().timeIntervalSince(lookupStartedAt)
+        report.metricText = "media: \(card.kind.rawValue)"
+        try Task.checkCancellation()
+        mediaCardPanelManager.show(card, nearGlobalPoint: NSEvent.mouseLocation)
+        let spokenText: String
+        switch card.kind {
+        case .paper: spokenText = "here's a paper: \(card.title). click the card to open it."
+        case .image: spokenText = "here's a picture. click it to open the full thing."
+        case .video: spokenText = "found a video: \(card.title). click to watch."
+        case .link: spokenText = "here's a link: \(card.title)."
+        }
+        try await speak(spokenText)
     }
 
     private func runAgentMode(
@@ -812,7 +873,7 @@ final class CompanionManager: ObservableObject {
         if let mediaQuery = answer.mediaQuery {
             presentCaption("finding that…")
             do {
-                let card = try await researchAgent.findMedia(query: mediaQuery, preferredKind: answer.mediaKind)
+                let card = try await researchAgent.findMedia(query: mediaQuery, preferredKind: answer.mediaKind, screenContext: nil)
                 try Task.checkCancellation()
                 mediaCardPanelManager.show(card, nearGlobalPoint: NSEvent.mouseLocation)
                 report.metricText = "media: \(card.kind.rawValue)"
@@ -888,6 +949,7 @@ final class CompanionManager: ObservableObject {
     // MARK: - Caption
 
     private func presentCaption(_ text: String) {
+        guard isCaptionEnabled else { return }
         captionRevealTimer?.invalidate()
         captionHideTask?.cancel()
         captionFullText = text
