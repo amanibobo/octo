@@ -15,6 +15,8 @@ final class DrawingLayerModel: ObservableObject {
     @Published private(set) var primitives: [DrawingPrimitive] = []
     @Published private(set) var geometry: CaptureGeometry?
     @Published private(set) var layerOpacity: Double = 0
+    /// 0 → 1 while strokes "draw on"; shapes trim themselves to this value.
+    @Published private(set) var drawProgress: CGFloat = 0
 
     private var autoClearTask: Task<Void, Never>?
 
@@ -25,8 +27,13 @@ final class DrawingLayerModel: ObservableObject {
         autoClearTask?.cancel()
         geometry = newGeometry
         primitives = newPrimitives
+        drawProgress = 0
         withAnimation(.easeIn(duration: 0.12)) {
             layerOpacity = 1
+        }
+        // Marker-style draw-on: strokes appear over ~0.6s in stroke order.
+        withAnimation(.easeInOut(duration: 0.65)) {
+            drawProgress = 1
         }
         if let autoClearAfterSeconds {
             autoClearTask = Task { [weak self] in
@@ -81,13 +88,14 @@ struct DrawingLayerView: View {
     @ViewBuilder
     private func primitiveView(_ primitive: DrawingPrimitive, geometry: CaptureGeometry) -> some View {
         switch primitive {
-        case .circle(_, let rectInCapturePixels, let tagNumber, let color):
+        case .circle(let id, let rectInCapturePixels, let tagNumber, let color):
             let rect = geometry.overlayRect(fromCapturePixelRect: rectInCapturePixels)
-            Path { path in
-                path.addRoundedRect(in: rect, cornerSize: CGSize(width: 6, height: 6))
-            }
-            .stroke(swiftUIColor(color), lineWidth: 2)
-            .shadow(color: swiftUIColor(color).opacity(0.45), radius: 4)
+            RoughRectangleShape(seed: id)
+                .trim(from: 0, to: model.drawProgress)
+                .stroke(swiftUIColor(color), style: StrokeStyle(lineWidth: 2.4, lineCap: .round, lineJoin: .round))
+                .frame(width: rect.width, height: rect.height)
+                .position(x: rect.midX, y: rect.midY)
+                .shadow(color: swiftUIColor(color).opacity(0.45), radius: 4)
             if let tagNumber {
                 Text("\(tagNumber)")
                     .font(.system(size: 10, weight: .bold, design: .rounded))
@@ -112,6 +120,7 @@ struct DrawingLayerView: View {
                 path.move(to: first)
                 for point in points.dropFirst() { path.addLine(to: point) }
             }
+            .trim(from: 0, to: model.drawProgress)
             .stroke(Color.orange, style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
             .shadow(color: Color.orange.opacity(0.5), radius: 3)
             .clipShape(clipShape(clipRectInCapturePixels, geometry: geometry))
@@ -129,18 +138,18 @@ struct DrawingLayerView: View {
             .fill(Color.orange.opacity(0.18))
             .clipShape(clipShape(clipRectInCapturePixels, geometry: geometry))
 
-        case .highlight(_, let rectInCapturePixels, let color):
+        case .highlight(let id, let rectInCapturePixels, let color):
             let rect = geometry.overlayRect(fromCapturePixelRect: rectInCapturePixels)
-            Path { path in
-                path.addRoundedRect(in: rect, cornerSize: CGSize(width: 4, height: 4))
-            }
-            .fill(swiftUIColor(color).opacity(color == .yellow ? 0.25 : 0.18))
-            .overlay(
-                Path { path in
-                    path.addRoundedRect(in: rect, cornerSize: CGSize(width: 4, height: 4))
-                }
-                .stroke(swiftUIColor(color).opacity(0.7), lineWidth: 1.5)
-            )
+            // Marker fill fades in while a wobbly outline draws around it.
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(swiftUIColor(color).opacity((color == .yellow ? 0.25 : 0.16) * Double(model.drawProgress)))
+                .frame(width: rect.width, height: rect.height)
+                .position(x: rect.midX, y: rect.midY)
+            RoughRectangleShape(seed: id, wobbleAmplitude: 1.8, cornerOvershoot: 3, passes: 1)
+                .trim(from: 0, to: model.drawProgress)
+                .stroke(swiftUIColor(color).opacity(0.9), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                .frame(width: rect.width, height: rect.height)
+                .position(x: rect.midX, y: rect.midY)
 
         case .badge(_, let anchorInCapturePixels, let text):
             let anchor = geometry.overlayPoint(fromCapturePixel: anchorInCapturePixels)
@@ -165,6 +174,7 @@ struct DrawingLayerView: View {
                 path.move(to: start)
                 path.addQuadCurve(to: end, control: control)
             }
+            .trim(from: 0, to: model.drawProgress)
             .stroke(swiftUIColor(color), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
             .shadow(color: swiftUIColor(color).opacity(0.5), radius: 4)
             Path { path in
@@ -183,13 +193,12 @@ struct DrawingLayerView: View {
                     .position(x: apex.x, y: apex.y)
             }
 
-        case .underline(_, let rectInCapturePixels, let color):
+        case .underline(let id, let rectInCapturePixels, let color):
             let rect = geometry.overlayRect(fromCapturePixelRect: rectInCapturePixels)
-            Path { path in
-                path.addRoundedRect(in: CGRect(x: rect.minX - 2, y: rect.maxY + 1, width: rect.width + 4, height: 3), cornerSize: CGSize(width: 1.5, height: 1.5))
-            }
-            .fill(swiftUIColor(color))
-            .shadow(color: swiftUIColor(color).opacity(0.6), radius: 3)
+            RoughLineShape(seed: id, from: CGPoint(x: rect.minX - 3, y: rect.maxY + 2), to: CGPoint(x: rect.maxX + 3, y: rect.maxY + 2))
+                .trim(from: 0, to: model.drawProgress)
+                .stroke(swiftUIColor(color), style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                .shadow(color: swiftUIColor(color).opacity(0.6), radius: 3)
 
         case .footnoteDrawer(_, let lines):
             VStack(alignment: .leading, spacing: 4) {

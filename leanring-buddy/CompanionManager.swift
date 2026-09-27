@@ -135,6 +135,11 @@ final class CompanionManager: ObservableObject {
     private var accessibilityCheckTimer: Timer?
     private var serviceHealthTimer: Timer?
     private var pendingKeyboardShortcutStartTask: Task<Void, Never>?
+    /// Drawings are anchored to pixels, not content. Scrolling or switching apps
+    /// moves the content out from under them, so both dismiss the drawings.
+    private var scrollDismissMonitor: Any?
+    private var appSwitchObserver: NSObjectProtocol?
+    private var lastScrollDismissAt = Date.distantPast
     /// Scheduled hide for transient cursor mode — cancelled if the user speaks again.
     private var transientHideTask: Task<Void, Never>?
 
@@ -252,6 +257,7 @@ final class CompanionManager: ObservableObject {
         bindVoiceStateObservation()
         bindAudioPowerLevel()
         bindShortcutTransitions()
+        installDrawingDismissMonitors()
 
         if hasCompletedOnboarding && allPermissionsGranted && isClickyCursorEnabled {
             overlayWindowManager.hasShownOverlayBefore = true
@@ -298,6 +304,8 @@ final class CompanionManager: ObservableObject {
         accessibilityCheckTimer = nil
         serviceHealthTimer?.invalidate()
         serviceHealthTimer = nil
+        if let scrollDismissMonitor { NSEvent.removeMonitor(scrollDismissMonitor) }
+        if let appSwitchObserver { NSWorkspace.shared.notificationCenter.removeObserver(appSwitchObserver) }
     }
 
     // MARK: - Permissions
@@ -984,6 +992,33 @@ final class CompanionManager: ObservableObject {
             return "the model couldn't run on this table. \(error.localizedDescription)"
         }
         return "something went wrong on my end. try that once more."
+    }
+
+    // MARK: - Drawing dismissal on scroll / app switch
+
+    private func installDrawingDismissMonitors() {
+        scrollDismissMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.scrollWheel]) { [weak self] event in
+            // Trackpad momentum sends a stream; a small nudge should not wipe the drawings.
+            guard abs(event.scrollingDeltaY) + abs(event.scrollingDeltaX) > 6 else { return }
+            Task { @MainActor [weak self] in self?.dismissDrawingsBecauseContentMoved(reason: "scroll") }
+        }
+        appSwitchObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] notification in
+            let activated = (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
+            guard activated != Bundle.main.bundleIdentifier else { return }
+            Task { @MainActor [weak self] in self?.dismissDrawingsBecauseContentMoved(reason: "app switch") }
+        }
+    }
+
+    private func dismissDrawingsBecauseContentMoved(reason: String) {
+        // Agent mode redraws every step and issues its own scrolls; leave it alone.
+        guard lastInteractionReport?.modeUsed != "Agent" || currentResponseTask == nil else { return }
+        guard drawingLayerModel.hasDrawings, Date().timeIntervalSince(lastScrollDismissAt) > 0.5 else { return }
+        lastScrollDismissAt = Date()
+        print("🧽 Drawings dismissed (\(reason))")
+        drawingLayerModel.clear()
+        screenChangeWatcher.stop()
     }
 
     // MARK: - Caption
