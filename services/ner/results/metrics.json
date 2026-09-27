@@ -1,0 +1,17 @@
+{
+  "base_model": "microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract",
+  "epochs": 2,
+  "train_sentences": 11228,
+  "train_seconds": 44.1,
+  "device": "cuda",
+  "max_length": 128,
+  "bc5cdr_test": {
+    "entity_f1": 0.8932,
+    "report": "              precision    recall  f1-score   support\n\n    CHEMICAL      0.928     0.946     0.937      5384\n     DISEASE      0.809     0.879     0.843      4424\n        DOSE      0.000     0.000     0.000         0\n        FREQ      0.000     0.000     0.000         0\n\n   micro avg      0.872     0.915     0.893      9808\n   macro avg      0.434     0.456     0.445      9808\nweighted avg      0.875     0.915     0.894      9808\n"
+  },
+  "synthetic_medlines_test": {
+    "entity_f1": 1.0,
+    "report": "              precision    recall  f1-score   support\n\n    CHEMICAL      1.000     1.000     1.000       800\n        DOSE      1.000     1.000     1.000       800\n        FREQ      1.000     1.000     1.000       800\n\n   micro avg      1.000     1.000     1.000      2400\n   macro avg      1.000     1.000     1.000      2400\nweighted avg      1.000     1.000     1.000      2400\n"
+  },
+  "onnx_error": "No module named 'optimum.exporters.onnx'"
+}

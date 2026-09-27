@@ -72,6 +72,7 @@ Apple on-device speech ─► keyword router ─► mode ─► DrawingLayer (li
 | General-mode vision answer (1280px Set-of-Mark, ≤100 elements) | ~1.2 s |
 | Whisper round trip (Fireworks) | 0.2–10 s, erratic on clips over ~5 s, hence on-device transcription by default |
 | ElevenLabs flash per sentence (via Worker) | ~0.3 s; OCR runs during transcription so it adds nothing on the critical path |
+| Clinical NER (BiomedBERT, fine-tuned this weekend) | BC5CDR test entity F1 0.893; synthetic med-line DOSE/FREQ F1 1.00; 44 s training on A10G |
 
 Real-screenshot eval and the RF-DETR extractor numbers are still to be recorded (see *Status*).
 
@@ -141,7 +142,7 @@ Panel toggles: **Clipboard fallback** (⌘A/⌘C when OCR < 90%), **On-device tr
 | Rx: privacy boundary enforced in code | done: payload scanned, `0 raw words` logged per request |
 | Rx: evidence badge + citations + disclosed sponsored slot | done; PubMed live with seeded cache fallback (PubMed returned 500s during the build) |
 | Rx: edit-and-re-run | done (watches the med list region) |
-| Rx: trained NER (BiomedBERT fine-tune) | not trained: needs a GPU (Modal payment method). Extraction is dictionary (15k RxNorm names) + regex, the PRD's weak-supervision pass, behind the same `ClinicalScreenReading` type |
+| Rx: trained NER (BiomedBERT fine-tune) | **trained** on Modal A10G (`services/ner/train_ner.py`, 44 s, 2 epochs, BC5CDR + 6k synthetic med lines). Held-out entity F1: **0.893** on BC5CDR (chemical 0.937, disease 0.843), 1.00 on synthetic med lines (DOSE/FREQ). Weights + `metrics.json` on the `sounder-ner` volume; ONNX export still pending (`optimum` module). On-device extraction in the app is still the dictionary + regex pass; wiring the ONNX model in is the next step |
 | Rx: DDInter database | download host unreachable; 75 curated pairs with mechanisms ship instead (`services/clinical/data/interactions.json`) |
 | Data: anomaly / drivers / fit, clipboard fallback, re-run | done (see Data mode) |
 | General: Set-of-Mark grounding by ID | done |

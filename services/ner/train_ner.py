@@ -1,6 +1,7 @@
 """Fine-tune a biomedical encoder for clinical span tagging on a Modal GPU.
 
-    cd services && modal run --detach ner/train_ner.py
+    cd services && modal run --detach ner/train_ner.py            # A10G (needs a payment method on the workspace)
+    cd services && SOUNDER_NER_GPU=none modal run --detach ner/train_ner.py --cpu   # CPU fallback, shorter schedule
 
 Labels: CHEMICAL (drugs), DISEASE (conditions) from BC5CDR, plus DOSE and FREQ
 from synthetic medication-list lines built from the RxNorm lexicon
@@ -12,16 +13,24 @@ exports ONNX, and stores everything in the `sounder-ner` volume:
 """
 
 import json
+import os
 import random
 
 import modal
+
+# Modal validates every function in the app, so a workspace without GPU access
+# cannot even start the CPU fallback while a GPU function is declared. Set
+# SOUNDER_NER_GPU=none to declare `train` without a GPU (it then just runs slowly).
+GPU_KIND = os.environ.get("SOUNDER_NER_GPU", "A10G")
+GPU_ARGUMENT = None if GPU_KIND.lower() == "none" else GPU_KIND
 
 BASE_MODEL = "microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract"
 LABELS = ["O", "B-CHEMICAL", "I-CHEMICAL", "B-DISEASE", "I-DISEASE", "B-DOSE", "I-DOSE", "B-FREQ", "I-FREQ"]
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
-    .pip_install("torch", "transformers>=4.44", "datasets", "seqeval", "accelerate", "onnx", "onnxruntime", "optimum[exporters]", "numpy<2")
+    # datasets<3 still runs the script-based tner/bc5cdr loader (3.x dropped dataset scripts).
+    .pip_install("torch", "transformers>=4.44", "datasets<3.0", "seqeval", "accelerate", "onnx", "onnxruntime", "optimum[exporters]", "numpy<2")
     .add_local_dir("clinical/data", remote_path="/root/clinical/data")
 )
 app = modal.App("sounder-ner", image=image)
@@ -60,8 +69,18 @@ def synthetic_med_lines(count: int, seed: int) -> list[tuple[list[str], list[str
     return examples
 
 
-@app.function(gpu="A10G", timeout=60 * 60, volumes={"/models": volume})
+@app.function(gpu=GPU_ARGUMENT, timeout=60 * 60, volumes={"/models": volume})
 def train(epochs: int = 2, synthetic_count: int = 6000):
+    return run_training(epochs=epochs, synthetic_count=synthetic_count, max_bc5_sentences=None, max_length=128, batch_size=32)
+
+
+@app.function(cpu=8.0, memory=16384, timeout=3 * 60 * 60, volumes={"/models": volume})
+def train_cpu(epochs: int = 1, synthetic_count: int = 1500, max_bc5_sentences: int = 3000):
+    """Fallback when the workspace has no GPU access: same model, shorter schedule."""
+    return run_training(epochs=epochs, synthetic_count=synthetic_count, max_bc5_sentences=max_bc5_sentences, max_length=64, batch_size=16)
+
+
+def run_training(epochs: int, synthetic_count: int, max_bc5_sentences, max_length: int, batch_size: int):
     import numpy as np
     import torch
     from datasets import Dataset, load_dataset
@@ -72,21 +91,25 @@ def train(epochs: int = 2, synthetic_count: int = 6000):
     label_to_id = {label: index for index, label in enumerate(LABELS)}
 
     # BC5CDR from tner: tags 0..4 = O, B-Chemical, B-Disease, I-Disease, I-Chemical (see dataset card)
-    bc5 = load_dataset("tner/bc5cdr")
-    tner_names = bc5["train"].features["tags"].feature.names if hasattr(bc5["train"].features["tags"], "feature") else None
-    tner_map = {"O": "O", "B-Chemical": "B-CHEMICAL", "I-Chemical": "I-CHEMICAL", "B-Disease": "B-DISEASE", "I-Disease": "I-DISEASE"}
+    bc5 = load_dataset("tner/bc5cdr", trust_remote_code=True)
+    # tner/bc5cdr label2id (dataset card): O=0, B-Chemical=1, B-Disease=2, I-Disease=3, I-Chemical=4
+    tner_id_to_label = {0: "O", 1: "B-CHEMICAL", 2: "B-DISEASE", 3: "I-DISEASE", 4: "I-CHEMICAL"}
+    tags_feature = bc5["train"].features["tags"]
+    class_names = getattr(getattr(tags_feature, "feature", None), "names", None)
+    if class_names:  # some mirrors ship ClassLabel names; map by name when they exist
+        tner_id_to_label = {index: name.upper().replace("CHEMICAL", "CHEMICAL").replace("DISEASE", "DISEASE") for index, name in enumerate(class_names)}
 
     def convert_bc5(split):
         rows = []
         for record in split:
-            tags = []
-            for tag in record["tags"]:
-                name = tner_names[tag] if tner_names else {0: "O", 1: "B-Chemical", 2: "B-Disease", 3: "I-Disease", 4: "I-Chemical"}[tag]
-                tags.append(tner_map[name])
-            rows.append({"tokens": record["tokens"], "tags": tags})
+            rows.append({"tokens": record["tokens"], "tags": [tner_id_to_label[int(tag)] for tag in record["tags"]]})
         return rows
 
-    train_rows = convert_bc5(bc5["train"]) + [{"tokens": t, "tags": g} for t, g in synthetic_med_lines(synthetic_count, seed=1)]
+    bc5_train_rows = convert_bc5(bc5["train"])
+    if max_bc5_sentences:
+        random.Random(0).shuffle(bc5_train_rows)
+        bc5_train_rows = bc5_train_rows[:max_bc5_sentences]
+    train_rows = bc5_train_rows + [{"tokens": t, "tags": g} for t, g in synthetic_med_lines(synthetic_count, seed=1)]
     valid_rows = convert_bc5(bc5["validation"])
     test_bc5_rows = convert_bc5(bc5["test"])
     test_synth_rows = [{"tokens": t, "tags": g} for t, g in synthetic_med_lines(800, seed=2)]
@@ -96,7 +119,7 @@ def train(epochs: int = 2, synthetic_count: int = 6000):
     tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
 
     def encode(batch):
-        encoded = tokenizer(batch["tokens"], is_split_into_words=True, truncation=True, max_length=128)
+        encoded = tokenizer(batch["tokens"], is_split_into_words=True, truncation=True, max_length=max_length)
         all_labels = []
         for row_index, tags in enumerate(batch["tags"]):
             word_ids = encoded.word_ids(batch_index=row_index)
@@ -133,8 +156,8 @@ def train(epochs: int = 2, synthetic_count: int = 6000):
         return {"f1": f1_score(true_tags, pred_tags), "report": classification_report(true_tags, pred_tags, digits=3)}
 
     arguments = TrainingArguments(
-        output_dir="/models/sounder-ner/checkpoints", per_device_train_batch_size=32, per_device_eval_batch_size=64,
-        learning_rate=3e-5, num_train_epochs=epochs, warmup_ratio=0.06, weight_decay=0.01, fp16=torch.cuda.is_available(),
+        output_dir="/models/sounder-ner/checkpoints", per_device_train_batch_size=batch_size, per_device_eval_batch_size=64,
+        learning_rate=3e-5, num_train_epochs=epochs, warmup_steps=60, weight_decay=0.01, fp16=torch.cuda.is_available(),
         eval_strategy="epoch", save_strategy="no", logging_steps=50, report_to=[],
     )
     trainer = Trainer(model=model, args=arguments, train_dataset=train_ds, eval_dataset=valid_ds,
@@ -144,7 +167,8 @@ def train(epochs: int = 2, synthetic_count: int = 6000):
     trainer.train()
     train_seconds = time.time() - started
 
-    metrics = {"base_model": BASE_MODEL, "epochs": epochs, "train_sentences": len(train_rows), "train_seconds": round(train_seconds, 1)}
+    metrics = {"base_model": BASE_MODEL, "epochs": epochs, "train_sentences": len(train_rows), "train_seconds": round(train_seconds, 1),
+               "device": "cuda" if torch.cuda.is_available() else "cpu", "max_length": max_length}
     for name, dataset in [("bc5cdr_test", test_bc5_ds), ("synthetic_medlines_test", test_synth_ds)]:
         prediction = trainer.predict(dataset)
         scored = compute_metrics((prediction.predictions, prediction.label_ids))
@@ -191,6 +215,6 @@ def predict(text: str = "Warfarin 5 mg PO daily for atrial fibrillation; metform
 
 
 @app.local_entrypoint()
-def main(epochs: int = 2):
-    metrics = train.remote(epochs=epochs)
+def main(epochs: int = 2, cpu: bool = False):
+    metrics = train_cpu.remote(epochs=1) if cpu else train.remote(epochs=epochs)
     print("bc5cdr F1:", metrics["bc5cdr_test"]["entity_f1"], "| synthetic F1:", metrics["synthetic_medlines_test"]["entity_f1"])
