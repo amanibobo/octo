@@ -8,7 +8,6 @@ Hold `Control + Option` over an EHR chart, a med list, or a PubMed page and ask 
 
 Built at **HackGT 13** for the Impiricus challenge ("invent the next way we engage HCPs") and the *Oracle of the Deep* track. General mode (ask anything about the screen, it points and can pull up a paper, image or video) and Agent mode (it operates the Mac: opens apps, clicks, types) are the other two modes of the same buddy.
 
-> **Disclosure.** Client shell forked from [Clicky](https://github.com/farzaa/clicky) (MIT) for window/capture/hotkey/TTS plumbing. Extraction (OCR grid reconstruction, ink-gap segmentation, clinical entity extraction), analysis and clinical services, grounding-by-ID, drawing layer, mode router, voice pipeline, privacy boundary and the synthetic-data pipeline are original work built during HackGT 13. Upstream `LICENSE` is kept; ours is `LICENSE-SOUNDER`.
 
 ## Why this is a new HCP engagement channel
 
