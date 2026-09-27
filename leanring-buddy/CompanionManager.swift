@@ -591,6 +591,17 @@ final class CompanionManager: ObservableObject {
                 print("📈 Chart detected at \(chart.boundingBoxInCapturePixels.integral), x ticks \(chart.xTickValues), y ticks \(chart.yTickValues)")
             }
 
+            // 3. Route. Tasks first ("open spotify and play…"), then Rx, Data, General.
+            let shouldRunAgentMode = selectedMode == .agent
+                || (selectedMode == .automatic && AgentModePipeline.looksLikeTask(transcript))
+            if shouldRunAgentMode {
+                try await runAgentMode(task: transcript, firstScreenAnalysis: screenAnalysis, report: &report)
+                finishReport(&report, startedAt: interactionStartedAt)
+                return
+            }
+
+
+
             // 3. Route. Rx first: a chart with medications plus a clinical question.
             let regionOfInterest = screenAnalysis.regionOfInterestInCapturePixels
             let clinicalReading = ClinicalModePipeline.scoped(screenAnalysis.clinicalReading, to: regionOfInterest)
