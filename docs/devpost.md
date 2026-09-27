@@ -40,7 +40,7 @@ Octo is a native macOS app in Swift and SwiftUI, with a small cloud backend behi
 
 **Grounding** → The language model never emits pixel coordinates. It sees a screenshot with numbered tags and returns element IDs. Every drawing in Rx mode is built from the rule engine's results, not from prose, so Octo cannot draw something the rules did not find.
 
-**Language and voice** → Claude Opus 5.5 handles general answers, narrates the clinical findings, plans agent steps and runs the web search for papers and videos. When it narrates Rx findings, the app checks that every number in the narration came from the rules engine and falls back to a templated sentence if one did not. Speech comes in through Apple's on-device recognizer and goes out through ElevenLabs.
+**Language and voice** → Claude Sonnet 5 handles general answers, narrates the clinical findings, plans agent steps and runs the web search for papers and videos. When it narrates Rx findings, the app checks that every number in the narration came from the rules engine and falls back to a templated sentence if one did not. Speech comes in through Apple's on-device recognizer and goes out through ElevenLabs.
 
 **Proxy** → Every cloud call goes through a Cloudflare Worker that holds the API keys. Nothing sensitive ships in the app.
 
