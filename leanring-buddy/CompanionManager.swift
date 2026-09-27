@@ -48,7 +48,7 @@ final class CompanionManager: ObservableObject {
     /// Operating mode chosen in the panel. Persisted.
     // Key versioned so older builds' persisted choice (e.g. "General" from testing)
     // does not silently keep Agent/Rx routing off after an update.
-    @Published private(set) var selectedMode: SounderMode = SounderMode(rawValue: UserDefaults.standard.string(forKey: "sounderSelectedMode_v2") ?? "") ?? .automatic
+    @Published private(set) var selectedMode: SounderMode = SounderMode(rawValue: UserDefaults.standard.string(forKey: "sounderSelectedMode_v3") ?? "") ?? .automatic
 
     /// Whether Data mode may fall back to select-all/copy when OCR confidence is low. Persisted.
     @Published private(set) var isClipboardFallbackEnabled: Bool = UserDefaults.standard.object(forKey: "sounderClipboardFallbackEnabled") == nil
@@ -196,7 +196,7 @@ final class CompanionManager: ObservableObject {
 
     func setSelectedMode(_ mode: SounderMode) {
         selectedMode = mode
-        UserDefaults.standard.set(mode.rawValue, forKey: "sounderSelectedMode_v2")
+        UserDefaults.standard.set(mode.rawValue, forKey: "sounderSelectedMode_v3")
     }
 
     func setClipboardFallbackEnabled(_ isEnabled: Bool) {

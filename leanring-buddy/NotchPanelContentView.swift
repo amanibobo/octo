@@ -146,17 +146,17 @@ struct NotchPanelContentView: View {
     }
 
     private var footer: some View {
-        HStack(spacing: 4) {
-            footerToggle(icon: "doc.on.clipboard", label: "Clipboard", isOn: companionManager.isClipboardFallbackEnabled) {
+        HStack(spacing: 6) {
+            footerToggle(icon: "doc.on.clipboard", label: "Clipboard fallback", isOn: companionManager.isClipboardFallbackEnabled) {
                 companionManager.setClipboardFallbackEnabled(!companionManager.isClipboardFallbackEnabled)
             }
-            footerToggle(icon: "waveform", label: "On-device", isOn: companionManager.isOfflineVoiceEnabled) {
+            footerToggle(icon: "waveform", label: "On-device transcription", isOn: companionManager.isOfflineVoiceEnabled) {
                 companionManager.setOfflineVoiceEnabled(!companionManager.isOfflineVoiceEnabled)
             }
-            footerToggle(icon: "cursorarrow", label: "Buddy", isOn: companionManager.isClickyCursorEnabled) {
+            footerToggle(icon: "cursorarrow", label: "Show buddy", isOn: companionManager.isClickyCursorEnabled) {
                 companionManager.setClickyCursorEnabled(!companionManager.isClickyCursorEnabled)
             }
-            footerToggle(icon: "scope", label: "Calibrate", isOn: false) {
+            footerToggle(icon: "scope", label: "Calibrate overlay", isOn: false) {
                 companionManager.runOverlayCalibration()
             }
             Spacer()
@@ -172,22 +172,18 @@ struct NotchPanelContentView: View {
         }
     }
 
+    /// Icon-only so the row never truncates; the label lives in the tooltip.
     private func footerToggle(icon: String, label: String, isOn: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 5) {
-                Image(systemName: icon)
-                    .font(.system(size: 10.5, weight: .medium))
-                Text(label)
-                    .font(.system(size: 11, weight: .medium))
-            }
-            .foregroundColor(isOn ? .white : .white.opacity(0.5))
-            .padding(.horizontal, 9)
-            .padding(.vertical, 5)
-            .background(Capsule().fill(isOn ? Color.white.opacity(0.14) : Color.clear))
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(isOn ? .white : .white.opacity(0.45))
+                .frame(width: 30, height: 28)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(isOn ? Color.white.opacity(0.14) : Color.clear))
         }
         .buttonStyle(.plain)
         .pointerCursor()
-        .help(label)
+        .help(label + (isOn ? " · on" : ""))
     }
 
     private var statusText: String {
