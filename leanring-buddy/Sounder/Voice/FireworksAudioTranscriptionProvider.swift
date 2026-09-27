@@ -202,6 +202,11 @@ private final class FireworksAudioTranscriptionSession: BuddyStreamingTranscript
     }
 
     deinit {
-        cancel()
+        // Do not call cancel() here: it enqueues a block that captures `self`
+        // on stateQueue, which lets a reference escape deinit and Swift then
+        // aborts with "deallocated with non-zero retain count". Only tear down
+        // things that need no reference to self.
+        transcriptionUploadTask?.cancel()
+        urlSession.invalidateAndCancel()
     }
 }

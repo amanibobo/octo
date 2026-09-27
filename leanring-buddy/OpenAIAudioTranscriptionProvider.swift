@@ -282,7 +282,10 @@ private final class OpenAIAudioTranscriptionSession: BuddyStreamingTranscription
     }
 
     deinit {
-        cancel()
+        // See FireworksAudioTranscriptionProvider: cancel() captures self on a
+        // queue, which must never happen from deinit.
+        transcriptionUploadTask?.cancel()
+        urlSession.invalidateAndCancel()
     }
 }
 
