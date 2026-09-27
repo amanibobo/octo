@@ -1,10 +1,14 @@
+<img src="docs/brand/octo-sprite.svg" width="56" align="left" alt="Octo" style="margin-right:12px">
+
 # Octo · Rx Sidekick
+
+<br clear="left">
 
 **A screen buddy for clinicians: it reads the chart on screen, catches drug interactions and dosing problems, surfaces new evidence, and speaks, without shipping patient text to any model.**
 
-Hold `Control + Option` over an EHR chart, a med list, or a PubMed page and ask out loud. Octo screenshots the display under your cursor, runs on-device OCR and on-device entity extraction (drugs, doses, frequencies, conditions, labs, age, sex), normalizes drugs to RxNorm concepts, and sends **only concept IDs and numbers** to a small service that checks interactions, label dosing and renal rules. The findings are drawn on the chart in place: a red link between interacting drugs, a coloured underline under an out-of-range dose, a "new evidence" badge next to a condition, numbered footnotes with the references. Then it explains in two sentences.
+Hold `Control + Option` over an EHR chart, a med list, or a PubMed page and ask out loud. Octo screenshots the display under your cursor, runs on-device OCR and on-device entity extraction (drugs, doses, frequencies, conditions, labs, age, sex), normalizes drugs to RxNorm concepts, and sends **only concept IDs and numbers** to a small service that checks interactions, label dosing and renal rules. The findings come back as a spoken answer in Octo's own words, with the numbers verified against the rules engine, and evidence lookups hold up a clickable paper card. The chart itself stays untouched.
 
-Built at **HackGT 13** for the Impiricus challenge ("invent the next way we engage HCPs") and the *Oracle of the Deep* track. Data mode (spreadsheets: anomalies, drivers, curve fits) and General mode (ask anything, it points) are the other two modes of the same buddy.
+Built at **HackGT 13** for the Impiricus challenge ("invent the next way we engage HCPs") and the *Oracle of the Deep* track. General mode (ask anything about the screen, it points and can pull up a paper, image or video) and Agent mode (it operates the Mac: opens apps, clicks, types) are the other two modes of the same buddy.
 
 > **Disclosure.** Client shell forked from [Clicky](https://github.com/farzaa/clicky) (MIT) for window/capture/hotkey/TTS plumbing. Extraction (OCR grid reconstruction, ink-gap segmentation, clinical entity extraction), analysis and clinical services, grounding-by-ID, drawing layer, mode router, voice pipeline, privacy boundary and the synthetic-data pipeline are original work built during HackGT 13. Upstream `LICENSE` is kept; ours is `LICENSE-SOUNDER`.
 
