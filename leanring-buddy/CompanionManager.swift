@@ -89,6 +89,8 @@ final class CompanionManager: ObservableObject {
     let globalPushToTalkShortcutMonitor = GlobalPushToTalkShortcutMonitor()
     let overlayWindowManager = OverlayWindowManager()
     let drawingLayerModel = DrawingLayerModel()
+    /// Clickable paper / image / video card the buddy holds up next to itself.
+    private let mediaCardPanelManager = MediaCardPanelManager()
 
     private let chatClient: any ChatModelClient
     private let analysisClient: AnalysisServiceClient
@@ -164,7 +166,7 @@ final class CompanionManager: ObservableObject {
         }
 
         self.generalModePipeline = GeneralModePipeline(chatClient: chatClient)
-        self.clinicalModePipeline = ClinicalModePipeline(clinicalClient: ClinicalServiceClient(baseURL: SounderConfiguration.analysisServiceBaseURL))
+        self.clinicalModePipeline = ClinicalModePipeline(clinicalClient: ClinicalServiceClient(baseURL: SounderConfiguration.analysisServiceBaseURL), chatClient: chatClient)
         self.agentModePipeline = AgentModePipeline(chatClient: chatClient)
         self.researchAgent = ResearchAgent(workerBaseURL: workerBaseURL)
 
@@ -491,6 +493,7 @@ final class CompanionManager: ObservableObject {
             drawingLayerModel.clear()
             clearDetectedElementLocation()
             clearCaption()
+            mediaCardPanelManager.hide()
 
             ClickyAnalytics.trackPushToTalkStarted()
             beginGestureSampling()
@@ -727,7 +730,7 @@ final class CompanionManager: ObservableObject {
                 try await speak("i see diagnoses but no medication list on this screen.")
                 return
             }
-            outcome = try await clinicalModePipeline.checkMedications(reading: reading)
+            outcome = try await clinicalModePipeline.checkMedications(reading: reading, question: report.transcript, isScopedToCircle: regionOfInterest != nil)
         }
         report.analysisSeconds = Date().timeIntervalSince(analysisStartedAt)
         report.metricText = outcome.metricText
@@ -735,6 +738,9 @@ final class CompanionManager: ObservableObject {
 
         drawingLayerModel.show(outcome.primitives + regionOutlinePrimitives(regionOfInterest), geometry: capture.geometry, autoClearAfterSeconds: 90)
         gesturePathPointsGlobal = []
+        if let mediaCard = outcome.mediaCard {
+            mediaCardPanelManager.show(mediaCard, nearGlobalPoint: NSEvent.mouseLocation)
+        }
         ClickyAnalytics.trackAIResponseReceived(response: outcome.spokenText)
         try await speak(isRerunAfterEdit ? "updated. " + outcome.spokenText : outcome.spokenText)
 
@@ -801,6 +807,19 @@ final class CompanionManager: ObservableObject {
 
         ClickyAnalytics.trackAIResponseReceived(response: answer.spokenText)
         try await speak(answer.spokenText)
+
+        // "show me a paper / video / picture of…": look it up and hold the card up.
+        if let mediaQuery = answer.mediaQuery {
+            presentCaption("finding that…")
+            do {
+                let card = try await researchAgent.findMedia(query: mediaQuery, preferredKind: answer.mediaKind)
+                try Task.checkCancellation()
+                mediaCardPanelManager.show(card, nearGlobalPoint: NSEvent.mouseLocation)
+                report.metricText = "media: \(card.kind.rawValue)"
+            } catch {
+                print("⚠️ media lookup failed: \(error.localizedDescription)")
+            }
+        }
     }
 
     /// Speaks and flips the cursor into the responding state while audio plays.

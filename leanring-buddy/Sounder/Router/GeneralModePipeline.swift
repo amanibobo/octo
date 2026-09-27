@@ -18,6 +18,9 @@ final class GeneralModePipeline {
         let pointedElement: ScreenElement?
         let pointLabel: String?
         let highlightedElements: [ScreenElement]
+        /// A web search query when the user asked to see a paper, image, video or link.
+        let mediaQuery: String?
+        let mediaKind: MediaCard.Kind?
     }
 
     private let chatClient: any ChatModelClient
@@ -32,7 +35,7 @@ final class GeneralModePipeline {
 
     the screenshot has numbered red tags. each tag is an element id from the list you are given. point (point_element_id + a 1-3 word point_label) only when the user is asking where something is, how to do something, or what to click, and the thing is on screen. for descriptive questions ("what do you see", "what is this") return null and do not point. you may also return a few highlight_element_ids to light up related text. only use ids from the list.
 
-    if the question is about a table on screen, answer what you can see, and mention that saying "what drives" or "what's weird here" makes you run a real model on it.
+    if the user asks you to show, find, pull up or bring up a paper, study, article, image, picture, diagram, video or link about something, set media_query to a precise web search query for it and media_kind to paper, image, video or link; you will hold the result up next to you, so say something like "here's one" in speak. otherwise leave both null.
     """
 
     private static let answerSchema: [String: Any] = [
@@ -41,9 +44,11 @@ final class GeneralModePipeline {
             "speak": ["type": "string"],
             "point_element_id": ["type": ["integer", "null"]],
             "point_label": ["type": ["string", "null"]],
-            "highlight_element_ids": ["type": "array", "items": ["type": "integer"]]
+            "highlight_element_ids": ["type": "array", "items": ["type": "integer"]],
+            "media_query": ["type": ["string", "null"]],
+            "media_kind": ["type": ["string", "null"], "enum": ["paper", "image", "video", "link", NSNull()]]
         ],
-        "required": ["speak", "point_element_id", "point_label", "highlight_element_ids"]
+        "required": ["speak", "point_element_id", "point_label", "highlight_element_ids", "media_query", "media_kind"]
     ]
 
     func answer(
@@ -113,11 +118,15 @@ final class GeneralModePipeline {
         let pointedElement = pointedElementID.flatMap { elementsByID[$0] }
         let highlightedElements = highlightIDs.compactMap { elementsByID[$0] }.filter { $0.id != pointedElementID }
 
+        let mediaQuery = (responseObject["media_query"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let mediaKind = (responseObject["media_kind"] as? String).flatMap { MediaCard.Kind(rawValue: $0) }
         return Answer(
             spokenText: spokenText.isEmpty ? "i didn't catch a question in that." : spokenText,
             pointedElement: pointedElement,
             pointLabel: pointLabel,
-            highlightedElements: Array(highlightedElements.prefix(6))
+            highlightedElements: Array(highlightedElements.prefix(6)),
+            mediaQuery: (mediaQuery?.isEmpty ?? true) ? nil : mediaQuery,
+            mediaKind: mediaKind
         )
     }
 }

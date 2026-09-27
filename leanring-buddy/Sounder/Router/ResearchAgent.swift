@@ -44,6 +44,42 @@ final class ResearchAgent {
         return mentionsAnApp && !mentionsFamiliarApp
     }
 
+    /// Finds one relevant paper, image or video for a query with web search and
+    /// returns it as a card. The model answers in a fixed one-line format so no
+    /// second structured call is needed.
+    func findMedia(query: String, preferredKind: MediaCard.Kind?) async throws -> MediaCard {
+        let kindHint = preferredKind.map { "the user wants a \($0.rawValue)." } ?? "pick the most useful kind: a paper (pubmed, doi, arxiv), a video (youtube), or an image."
+        let requestBody: [String: Any] = [
+            "max_tokens": 300,
+            "system": "you find one authoritative, directly relevant resource on the web. \(kindHint) reply with exactly one line and nothing else, in this format: KIND | TITLE | URL | SOURCE | IMAGE_URL. KIND is paper, image, video or link. SOURCE is the journal/site and year. IMAGE_URL is a direct image url when the kind is image (or a figure/thumbnail if you have one), otherwise the word none. the URL must be one you actually found.",
+            "tools": [["type": "web_search_20250305", "name": "web_search", "max_uses": 3]],
+            "messages": [["role": "user", "content": query]]
+        ]
+        var request = URLRequest(url: claudeURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+
+        let (data, response) = try await urlSession.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let contentBlocks = payload["content"] as? [[String: Any]] else {
+            throw ClaudeChatError(message: "media lookup failed")
+        }
+        let text = contentBlocks.compactMap { ($0["type"] as? String) == "text" ? $0["text"] as? String : nil }.joined(separator: "\n")
+        guard let line = text.split(separator: "\n").map({ $0.trimmingCharacters(in: .whitespaces) }).last(where: { $0.contains(" | ") }) else {
+            throw ClaudeChatError(message: "media lookup returned no result line")
+        }
+        let parts = line.split(separator: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard parts.count >= 3, let url = URL(string: parts[2]) else {
+            throw ClaudeChatError(message: "media lookup line was malformed")
+        }
+        let kind = MediaCard.Kind(rawValue: parts[0].lowercased()) ?? .link
+        let source = parts.count > 3 ? parts[3] : ""
+        let imageURL = parts.count > 4 && parts[4].lowercased() != "none" ? URL(string: parts[4]) : nil
+        return MediaCard(kind: kind, title: parts[1], subtitle: source, url: url, imageURL: imageURL)
+    }
+
     /// Asks Claude (with web search, at most 3 searches) for a 3–6 step plan.
     func research(task: String) async throws -> ResearchNotes {
         let requestBody: [String: Any] = [

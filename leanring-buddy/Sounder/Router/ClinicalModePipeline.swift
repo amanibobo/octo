@@ -27,14 +27,18 @@ final class ClinicalModePipeline {
         let spokenText: String
         let metricText: String
         let footnotes: [String]
+        /// Something worth holding up next to the buddy (the top trial for evidence).
+        var mediaCard: MediaCard? = nil
     }
 
     private let clinicalClient: ClinicalServiceClient
+    private let chatClient: any ChatModelClient
 
     static let fillerPhrases = ["checking the med list", "pulling the latest evidence"]
 
-    init(clinicalClient: ClinicalServiceClient) {
+    init(clinicalClient: ClinicalServiceClient, chatClient: any ChatModelClient) {
         self.clinicalClient = clinicalClient
+        self.chatClient = chatClient
     }
 
     // MARK: - Intent
@@ -78,7 +82,7 @@ final class ClinicalModePipeline {
 
     // MARK: - Medication check
 
-    func checkMedications(reading: ClinicalScreenReading) async throws -> Outcome {
+    func checkMedications(reading: ClinicalScreenReading, question: String, isScopedToCircle: Bool) async throws -> Outcome {
         let payload = Self.buildCheckPayload(from: reading)
         let privacyReport = Self.privacyReport(for: payload, reading: reading)
         print("🔒 outbound /clinical/check: \(privacyReport)")
@@ -90,7 +94,8 @@ final class ClinicalModePipeline {
         var footnotes: [String] = []
         for (index, finding) in response.findings.enumerated() {
             let footnoteNumber = index + 1
-            let severityColor: DrawingColor = finding.severity == "major" ? .red : (finding.severity == "moderate" ? .orange : .yellow)
+            // Red = major, yellow = warning (moderate), green = note (minor).
+            let severityColor: DrawingColor = finding.severity == "major" ? .red : (finding.severity == "moderate" ? .yellow : .green)
             let mentions = finding.medicationIds.compactMap { mentionsByID[$0] }
 
             switch finding.type {
@@ -119,7 +124,8 @@ final class ClinicalModePipeline {
         }
 
         let metricText = "\(response.findings.count) findings · \(response.interactionsChecked) pairs checked · eGFR \(response.egfrUsed.map { String(format: "%.0f", $0) } ?? "n/a") (\(response.egfrSource ?? "none"))"
-        return Outcome(primitives: primitives, spokenText: response.summaryText, metricText: metricText, footnotes: footnotes)
+        let spokenText = await narrate(question: question, reading: reading, findings: response, footnotes: footnotes, isScopedToCircle: isScopedToCircle)
+        return Outcome(primitives: primitives, spokenText: spokenText, metricText: metricText, footnotes: footnotes)
     }
 
     // MARK: - Evidence
@@ -162,7 +168,70 @@ final class ClinicalModePipeline {
         }
 
         let metricText = "\(trials.count) trials · source \(response.source)\(sponsored.isEmpty ? "" : " · 1 sponsored slot")"
-        return Outcome(primitives: primitives, spokenText: response.spokenSummary, metricText: metricText, footnotes: footnotes)
+        var outcome = Outcome(primitives: primitives, spokenText: response.spokenSummary, metricText: metricText, footnotes: footnotes)
+        if let lead = trials.first, let url = URL(string: lead.url), !lead.url.isEmpty {
+            outcome.mediaCard = MediaCard(kind: .paper, title: lead.title, subtitle: "\(lead.source) · \(lead.id)", url: url, imageURL: nil)
+        }
+        return outcome
+    }
+
+    // MARK: - Narration
+
+    /// Claude answers the clinician's actual question in its own words, grounded in
+    /// the findings the rules service produced (numbered like the footnotes). It sees
+    /// the same concept-level facts the service saw, never raw chart text. If the
+    /// rewrite drops a number the findings contain, the deterministic summary is used.
+    private func narrate(question: String, reading: ClinicalScreenReading, findings: ClinicalCheckResponse, footnotes: [String], isScopedToCircle: Bool) async -> String {
+        let medicationLines = reading.medications.map { mention -> String in
+            var line = mention.name
+            if let dose = mention.doseMilligrams { line += " \(dose.formatted()) mg" }
+            if let perDay = mention.dosesPerDay { line += " ×\(perDay.formatted())/day" }
+            return line
+        }.joined(separator: ", ")
+        let labLines = reading.labs.map { "\($0.key)=\($0.value.formatted())" }.joined(separator: ", ")
+        let findingLines = findings.findings.enumerated().map { index, finding in
+            "\(index + 1). [\(finding.severity)] \(finding.message)\(finding.advice.map { " advice: \($0)" } ?? "")"
+        }.joined(separator: "\n")
+
+        let systemPrompt = """
+        you are sounder, a clinical sidekick speaking to a clinician looking at a chart. answer their question directly and conversationally in at most 75 words, lowercase, no lists. the numbered findings below were computed by a rules engine and are drawn on the chart with matching footnote numbers; refer to them by number when relevant ("that's finding one"). you may add one sentence of general pharmacology context from your own knowledge, but say "generally" when you do, and never invent lab values, doses or interactions that are not in the findings. if the question is about something the findings do not cover, say what the findings do show and answer the rest from general knowledge briefly. if nothing was flagged, say so plainly.
+        """
+        let scopeNote = isScopedToCircle ? "the clinician circled part of the chart, so only those medications were checked.\n" : ""
+        let userText = """
+        \(scopeNote)patient: \(reading.ageYears.map { "\($0) years" } ?? "age unknown") \(reading.sex ?? "")
+        medications on screen: \(medicationLines.isEmpty ? "none" : medicationLines)
+        labs: \(labLines.isEmpty ? "none" : labLines)
+        conditions: \(reading.conditions.map(\.canonicalName).joined(separator: ", "))
+        egfr used: \(findings.egfrUsed.map { "\($0.formatted()) (\(findings.egfrSource ?? ""))" } ?? "n/a")
+        findings (\(findings.interactionsChecked) pairs checked):
+        \(findingLines.isEmpty ? "none" : findingLines)
+
+        clinician asked: "\(question)"
+        """
+        print("🔒 outbound narration: \(reading.medications.count) drug concepts, \(findings.findings.count) findings, 0 raw chart words")
+
+        do {
+            let answer = try await chatClient.completeText(systemPrompt: systemPrompt, userText: userText, maxTokens: 300, timeoutSeconds: 12)
+            let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+            guard !trimmed.isEmpty else { return findings.summaryText }
+            // Every number the findings mention must survive verbatim if it is spoken at all;
+            // the model may leave numbers out but may not alter them.
+            let allowedNumbers = Self.numberTokens(in: findingLines + " " + labLines + " " + medicationLines + " \(reading.ageYears ?? 0)")
+            let spokenNumbers = Self.numberTokens(in: trimmed)
+            guard spokenNumbers.isSubset(of: allowedNumbers) else {
+                print("⚠️ narration altered a number; using the rules summary")
+                return findings.summaryText
+            }
+            return trimmed
+        } catch {
+            return findings.summaryText
+        }
+    }
+
+    private static func numberTokens(in text: String) -> Set<String> {
+        let pattern = try! NSRegularExpression(pattern: #"\d+(?:\.\d+)?"#)
+        let matches = pattern.matches(in: text, range: NSRange(text.startIndex..., in: text))
+        return Set(matches.compactMap { Range($0.range, in: text).map { String(text[$0]) } })
     }
 
     // MARK: - Payload + privacy boundary

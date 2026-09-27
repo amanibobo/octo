@@ -179,7 +179,12 @@ final class NotchPanelManager {
     private func updateHover() {
         guard let panel else { return }
         let mouse = NSEvent.mouseLocation
-        let inside = panel.frame.insetBy(dx: -6, dy: -6).contains(mouse)
+        // Generous hover zone: the notch itself plus the menu-bar strip just around
+        // and below it, so brushing the top of the screen near the notch opens it.
+        let hoverZone = notchState.isExpanded
+            ? panel.frame.insetBy(dx: -10, dy: -10)
+            : panel.frame.insetBy(dx: -24, dy: 0).offsetBy(dx: 0, dy: -18).union(panel.frame)
+        let inside = hoverZone.contains(mouse)
         if inside != notchState.isHovering {
             notchState.isHovering = inside
         }
@@ -193,7 +198,7 @@ final class NotchPanelManager {
                     self.setExpanded(true)
                 }
                 collapseWorkItem = workItem
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: workItem)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: workItem)
             }
         } else if notchState.isExpanded, collapseWorkItem == nil {
             let workItem = DispatchWorkItem { [weak self] in
