@@ -43,7 +43,6 @@ final class NotchPanelManager {
     private let companionManager: CompanionManager
     private let islandState = NotchIslandState()
     private var panel: NotchCanvasPanel?
-    private var hostingView: NotchHostingView?
     private var hoverTimer: Timer?
     private var expandWorkItem: DispatchWorkItem?
     private var collapseWorkItem: DispatchWorkItem?
@@ -96,6 +95,7 @@ final class NotchPanelManager {
         collapseWorkItem?.cancel()
         collapseWorkItem = nil
         guard islandState.isExpanded != expanded else { return }
+        print("🏝️ notch \(expanded ? "expand" : "collapse")")
         withAnimation(NotchIslandState.springAnimation) {
             islandState.isExpanded = expanded
             if !expanded { islandState.isShowingSettings = false }
@@ -149,7 +149,6 @@ final class NotchPanelManager {
         canvas.contentView = hosting
 
         panel = canvas
-        hostingView = hosting
         layoutPanel()
         canvas.orderFrontRegardless()
         SkyLightOperator.shared.delegateWindow(canvas)
@@ -175,12 +174,11 @@ final class NotchPanelManager {
     /// Screen rect (global AppKit coordinates) the island currently occupies.
     private var islandScreenRect: CGRect {
         guard let panel, let screen = Self.notchScreen() else { return .zero }
-        let islandSize: CGSize
-        if islandState.isExpanded {
-            let fittingHeight = hostingView?.fittingSize.height ?? 0
-            islandSize = CGSize(width: NotchIslandState.expandedWidth, height: max(fittingHeight, 260))
-        } else {
-            islandSize = islandState.collapsedSize
+        var islandSize = islandState.measuredIslandSize
+        if islandSize.width < 1 || islandSize.height < 1 {
+            islandSize = islandState.isExpanded
+                ? CGSize(width: NotchIslandState.expandedWidth, height: 320)
+                : islandState.collapsedSize
         }
         return CGRect(
             x: panel.frame.midX - islandSize.width / 2,
@@ -210,6 +208,7 @@ final class NotchPanelManager {
         let isInside = hoverZone.contains(mouseLocation)
         if isInside != islandState.isHovering {
             islandState.isHovering = isInside
+            print("🏝️ hover \(isInside ? "in" : "out") · mouse (\(Int(mouseLocation.x)), \(Int(mouseLocation.y))) · island \(islandRect.integral) · measured \(islandState.measuredIslandSize) · expanded \(islandState.isExpanded)")
         }
 
         if isInside {

@@ -55,6 +55,10 @@ final class NotchIslandState: ObservableObject {
     /// Physical notch metrics, set once from the screen.
     var notchWidth: CGFloat = 200
     var notchHeight: CGFloat = 38
+    /// The island's current rendered size (follows the spring), reported by the
+    /// view so the hover zone and outside-click test match what is on screen.
+    /// Not published: it changes every animation frame and nothing renders from it.
+    var measuredIslandSize: CGSize = .zero
 
     static let expandedWidth: CGFloat = 440
     static let springAnimation: Animation = .spring(response: 0.5, dampingFraction: 0.75, blendDuration: 1)
@@ -95,6 +99,13 @@ struct NotchIslandView: View {
         .frame(width: state.isExpanded ? NotchIslandState.expandedWidth : state.collapsedSize.width,
                height: state.isExpanded ? nil : state.collapsedSize.height)
         .fixedSize(horizontal: false, vertical: state.isExpanded)
+        .background(
+            GeometryReader { islandGeometry in
+                Color.clear
+                    .onAppear { state.measuredIslandSize = islandGeometry.size }
+                    .onChange(of: islandGeometry.size) { _, newSize in state.measuredIslandSize = newSize }
+            }
+        )
         .scaleEffect(state.isPressed ? 0.975 : 1, anchor: .top)
         .contentShape(shape)
         .onTapGesture { onToggle() }

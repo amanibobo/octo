@@ -52,6 +52,8 @@ Worker vars: `FIREWORKS_CHAT_MODEL`, `FIREWORKS_TRANSCRIPTION_MODEL`, `ELEVENLAB
 
 **Menu Bar Panel Pattern**: The companion panel uses `NSStatusItem` for the menu bar icon and a custom borderless `NSPanel` for the floating control panel. This gives full control over appearance (dark, rounded corners, custom shadow) and avoids the standard macOS menu/popover chrome. The panel is non-activating so it doesn't steal focus. A global event monitor auto-dismisses it on outside clicks.
 
+**Notch Island (DynamicNotch model)**: On Macs with a notch, `NotchPanelManager` replaces the dropdown. One large transparent canvas `NSPanel` (640×720, `.borderless, .nonactivatingPanel`, level `mainMenu + 3`, `constrainFrameRect` override, `acceptsMouseMovedEvents`) is pinned to the top-centre of the notch screen and delegated to a private SkyLight space (`SkyLightOperator`, dlsym'd, silent fallback) so it renders above the menu bar. The island is pure SwiftUI inside it (`NotchIslandView`): a `NotchSilhouetteShape` with animatable top/bottom corner radii that morphs between the collapsed notch (notch + 12 pt wide) and the 440 pt card with a spring (response 0.5, damping 0.75); the window never resizes. A 30 Hz timer expands on hover (0.10 s dwell) and collapses 0.55 s after the pointer leaves; a global click monitor collapses on outside clicks. The view reports its rendered size (`measuredIslandSize`) so the hover zone tracks the animation. Notch metrics come from `safeAreaInsets.top` and the gap between `auxiliaryTopLeftArea`/`auxiliaryTopRightArea`.
+
 **Cursor Overlay**: A full-screen transparent `NSPanel` hosts the blue cursor companion. It's non-activating, joins all Spaces, and never steals focus. The cursor position, response text, waveform, and pointing animations all render in this overlay via SwiftUI through `NSHostingView`.
 
 **Global Push-To-Talk Shortcut**: Background push-to-talk uses a listen-only `CGEvent` tap instead of an AppKit global monitor so modifier-based shortcuts like `ctrl + option` are detected more reliably while the app is running in the background.
@@ -76,11 +78,16 @@ Worker vars: `FIREWORKS_CHAT_MODEL`, `FIREWORKS_TRANSCRIPTION_MODEL`, `ELEVENLAB
 |------|-------|---------|
 | `leanring_buddyApp.swift` | ~89 | Menu bar app entry point. `CompanionAppDelegate` creates `MenuBarPanelManager` and starts `CompanionManager`. |
 | `CompanionManager.swift` | ~720 | State machine and **mode router**. Owns dictation, shortcut monitor, overlay, drawing layer, speech output, both pipelines, service health polling, the calibration self-test and the edit-and-re-run watcher. `performInteraction` = capture → OCR → table/chart → route → draw → speak. |
-| `MenuBarPanelManager.swift` | ~243 | NSStatusItem + custom NSPanel lifecycle. |
+| `MenuBarPanelManager.swift` | ~243 | NSStatusItem + custom NSPanel lifecycle (fallback on Macs without a notch; the status item toggles the notch otherwise). |
+| `NotchPanelManager.swift` | ~250 | Notch canvas panel, hover/outside-click expand-collapse, notch geometry. |
+| `NotchPanelContentView.swift` | ~210 | Expanded card: status, mode capsule + per-mode description and example, last run, hotkey chips, settings button. |
+| `Notch/NotchIslandView.swift` | ~230 | `NotchSilhouetteShape`, `NotchIslandState`, island view (collapsed eyes/waveform/pulse, expanded card or settings). |
+| `Notch/NotchSettingsView.swift` | ~145 | Settings page: hotkey chord, on-device transcription, captions, buddy visibility, clipboard fallback, service status, calibrate, quit. |
+| `Notch/SkyLightOperator.swift` | ~75 | Private SkyLight space at max level for the notch window (dlsym, optional). |
 | `CompanionPanelView.swift` | ~560 | Panel UI: permissions, Start, mode picker (Auto/General/Data), service status, last-run latency/confidence readout, options (clipboard fallback, offline voice, show cursor, calibrate). |
 | `OverlayWindow.swift` | ~780 | Full-screen transparent overlay hosting the blue cursor and `DrawingLayerView`. Cursor animation, bezier pointing, multi-monitor. |
 | `Sounder/SounderConfiguration.swift` | ~40 | Info.plist-backed config: Worker URL, analysis URL, chat model, speech provider, LLM narration flag. |
-| `Sounder/SounderMode.swift` | ~35 | `automatic` / `general` / `data` with display copy. |
+| `Sounder/SounderMode.swift` | ~47 | `automatic` / `general` / `clinical` / `agent` with display name, explanation and example question. |
 | `Sounder/Backend/SounderModels.swift` | ~300 | `CaptureGeometry`, `ScreenElement`, `ExtractedTable`, `ChartRegion`/`AxisCalibration`, analysis response Codables (snake_case mirror of `services/analysis/schemas.py`), `SounderInteractionReport`. |
 | `Sounder/Backend/FireworksChatClient.swift` | ~190 | OpenAI-compatible chat via Worker `/chat`: images as data URLs, JSON-schema `response_format`, `reasoning_effort: low`, prior turns. |
 | `Sounder/Backend/AnalysisServiceClient.swift` | ~100 | `/health`, `/analyze`. |
@@ -96,7 +103,9 @@ Worker vars: `FIREWORKS_CHAT_MODEL`, `FIREWORKS_TRANSCRIPTION_MODEL`, `ELEVENLAB
 | `Sounder/Clinical/ClinicalLexicon.swift` | ~130 | Drug name → RXCUI table (bundle JSON + built-in fallback), condition aliases → ICD-10, lab keys. |
 | `Sounder/Clinical/ClinicalEntityExtractor.swift` | ~260 | OCR rows → `ClinicalScreenReading` (medications with dose/frequency boxes, conditions, labs, age, sex). |
 | `Sounder/Clinical/ClinicalServiceClient.swift` | ~100 | `/clinical/check`, `/clinical/evidence`. |
-| `Sounder/Router/ClinicalModePipeline.swift` | ~230 | Intent keywords, concept payload + privacy assertion, findings → drawing primitives + footnotes, evidence badges. |
+| `Sounder/Router/ClinicalModePipeline.swift` | ~230 | Intent keywords, concept payload + privacy assertion, findings → severity-coloured links/underlines/badges (no references drawer), Claude narration, evidence badges. |
+| `Sounder/Router/ResearchAgent.swift` | ~160 | Claude web-search: task plans for unfamiliar apps, `mediaRequest(in:)` keyword intent + `findMedia` (paper/image/video/link card, screen text as context). |
+| `Sounder/Overlay/MediaCardPanelManager.swift` | ~215 | Clickable paper/image/video card panel the buddy holds up. |
 | `Sounder/Router/GeneralModePipeline.swift` | ~110 | Set-of-Mark vision answer `{speak, point_element_id, point_label, highlight_element_ids}`. |
 | `Sounder/Router/DataModePipeline.swift` | ~260 | Planner (LLM JSON + keyword fallback), analysis call, drawing primitives, templated speech + verified LLM rephrase. |
 | `Sounder/Voice/FireworksAudioTranscriptionProvider.swift` | ~210 | Upload-based `BuddyTranscriptionProvider` for Fireworks Whisper via Worker `/transcribe`. |
