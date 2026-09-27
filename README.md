@@ -80,7 +80,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/uvicorn analysis.app:app --port 8000
 ```
 
-Or deploy to Modal (`modal deploy modal_app.py`) and set `SounderAnalysisBaseURL` in Info.plist.
+The app ships pointing at the deployed Modal instance (`https://amanibobo1--sounder-analysis-serve.modal.run`, deployed with `modal deploy modal_app.py`, one container kept warm). Run uvicorn locally and switch `SounderAnalysisBaseURL` in Info.plist when you want to work offline.
 
 ### 3. App
 
@@ -105,7 +105,7 @@ Do **not** build from the terminal with `xcodebuild`: it invalidates the TCC per
 | Key | Default | Meaning |
 |---|---|---|
 | `SounderWorkerBaseURL` | `http://127.0.0.1:8787` | Cloudflare Worker proxy |
-| `SounderAnalysisBaseURL` | `http://127.0.0.1:8000` | Python analysis service |
+| `SounderAnalysisBaseURL` | `https://amanibobo1--sounder-analysis-serve.modal.run` | Python analysis service (Modal, one warm container). Set to `http://127.0.0.1:8000` to use a local uvicorn |
 | `SounderChatModel` | `accounts/fireworks/routers/kimi-k3-fast` | Fireworks model (must support images + JSON schema) |
 | `SounderSpeechOutputProvider` | `system` | `system` (AVSpeechSynthesizer, offline) or `elevenlabs` |
 | `SounderUsesLLMNarration` | `true` | Let the LLM rephrase result sentences (numbers are verified) |
@@ -127,7 +127,7 @@ Panel toggles: **Clipboard fallback** (⌘A/⌘C when OCR < 90%), **Offline voic
 | Edit-and-re-run diffing | done (table region watcher, fires once the screen settles) |
 | Offline fallback | Apple Speech + keyword planner + local analysis service; General mode needs the network |
 | Trained screenshot extractor (RF-DETR) | synthetic data generator runs; `train.py` / `serve.py` are scaffolds, not yet trained (needs GPU) |
-| Modal deployment | `modal_app.py` written, not deployed (needs an account) |
+| Modal deployment | deployed: `https://amanibobo1--sounder-analysis-serve.modal.run` (`min_containers=1`) |
 | Golden-path recording, Devpost, slide | not started |
 
 ## Repo layout

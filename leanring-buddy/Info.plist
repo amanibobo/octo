@@ -13,7 +13,7 @@
 	<key>SounderWorkerBaseURL</key>
 	<string>http://127.0.0.1:8787</string>
 	<key>SounderAnalysisBaseURL</key>
-	<string>http://127.0.0.1:8000</string>
+	<string>https://amanibobo1--sounder-analysis-serve.modal.run</string>
 	<key>SounderChatModel</key>
 	<string>accounts/fireworks/routers/kimi-k3-fast</string>
 	<key>SounderSpeechOutputProvider</key>
