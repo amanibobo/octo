@@ -25,7 +25,7 @@ struct NotchPanelContentView: View {
                 .padding(.horizontal, horizontalPadding)
 
             Text("Hold ⌃ ⌥ and talk. Circle with the cursor to focus.")
-                .font(.system(size: 11.5))
+                .font(.system(size: 12.5))
                 .foregroundColor(.white.opacity(0.45))
                 .padding(.horizontal, horizontalPadding)
                 .padding(.top, 12)
@@ -43,7 +43,7 @@ struct NotchPanelContentView: View {
                 .padding(.horizontal, horizontalPadding - 6)
                 .padding(.vertical, 10)
         }
-        .frame(width: 340)
+        .frame(width: 420)
     }
 
     // MARK: - Pieces
@@ -55,7 +55,7 @@ struct NotchPanelContentView: View {
                 statusEye
             }
             Text("Sounder")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(.white)
             Spacer()
             HStack(spacing: 6) {
@@ -88,10 +88,10 @@ struct NotchPanelContentView: View {
                 let isSelected = companionManager.selectedMode == mode
                 Button(action: { companionManager.setSelectedMode(mode) }) {
                     Text(mode.displayName)
-                        .font(.system(size: 11.5, weight: isSelected ? .semibold : .medium))
+                        .font(.system(size: 12.5, weight: isSelected ? .semibold : .medium))
                         .foregroundColor(isSelected ? .black : .white.opacity(0.7))
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
+                        .padding(.vertical, 7)
                         .background(
                             Capsule().fill(isSelected ? DS.Colors.overlayCursorBlue : Color.clear)
                         )
@@ -116,7 +116,7 @@ struct NotchPanelContentView: View {
         if let report = companionManager.lastInteractionReport {
             VStack(alignment: .leading, spacing: 5) {
                 Text("\u{201C}\(report.transcript)\u{201D}")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundColor(.white.opacity(0.85))
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
@@ -129,7 +129,7 @@ struct NotchPanelContentView: View {
                         Text(metric).lineLimit(1)
                     }
                 }
-                .font(.system(size: 11))
+                .font(.system(size: 12))
                 .foregroundColor(.white.opacity(0.45))
                 if let error = report.errorMessage {
                     Text(error)

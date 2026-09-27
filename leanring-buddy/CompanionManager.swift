@@ -96,7 +96,6 @@ final class CompanionManager: ObservableObject {
     /// Used only when the configured speech provider fails (e.g. ElevenLabs credits).
     private lazy var fallbackSpeechOutput: SystemSpeechOutputClient = SystemSpeechOutputClient()
     private let generalModePipeline: GeneralModePipeline
-    private let dataModePipeline: DataModePipeline
     private let clinicalModePipeline: ClinicalModePipeline
     private let agentModePipeline: AgentModePipeline
     private let researchAgent: ResearchAgent
@@ -108,16 +107,12 @@ final class CompanionManager: ObservableObject {
     /// Conversation history for General mode so follow-ups make sense.
     private var conversationHistory: [ChatModelPriorTurn] = []
 
-    /// The plan of the last Data-mode run, reused when the table is edited and re-run.
-    private var lastDataModePlan: DataModePlan?
 
     /// Everything read off the screen for one interaction.
     private struct ScreenAnalysis {
         let capture: SounderScreenCapture
         let textLines: [RecognizedTextLine]
         let elements: [ScreenElement]
-        let table: ExtractedTable?
-        let chart: ChartRegion?
         let clinicalReading: ClinicalScreenReading
         let regionOfInterestInCapturePixels: CGRect?
         let captureSeconds: Double
@@ -147,10 +142,6 @@ final class CompanionManager: ObservableObject {
 
     /// How long drawings stay on screen after the buddy finishes talking.
     private static let drawingAutoClearSeconds: TimeInterval = 45
-    /// Below this OCR confidence Data mode asks the frontmost app for the table via the clipboard.
-    private static let clipboardFallbackConfidenceThreshold = 0.9
-    /// In Auto mode a table must reach this confidence before the data planner is consulted.
-    private static let automaticModeTableConfidenceThreshold = 0.6
 
     init() {
         let workerBaseURL = SounderConfiguration.workerBaseURL
@@ -173,7 +164,6 @@ final class CompanionManager: ObservableObject {
         }
 
         self.generalModePipeline = GeneralModePipeline(chatClient: chatClient)
-        self.dataModePipeline = DataModePipeline(chatClient: chatClient, analysisClient: analysisClient)
         self.clinicalModePipeline = ClinicalModePipeline(clinicalClient: ClinicalServiceClient(baseURL: SounderConfiguration.analysisServiceBaseURL))
         self.agentModePipeline = AgentModePipeline(chatClient: chatClient)
         self.researchAgent = ResearchAgent(workerBaseURL: workerBaseURL)
@@ -579,27 +569,11 @@ final class CompanionManager: ObservableObject {
             let capture = screenAnalysis.capture
             let textLines = screenAnalysis.textLines
             let elements = screenAnalysis.elements
-            let extractedTable = screenAnalysis.table
-            let chart = screenAnalysis.chart
             report.captureSeconds = screenAnalysis.captureSeconds
             report.ocrSeconds = screenAnalysis.ocrSeconds
+            print("👁️ \(textLines.count) OCR lines, \(elements.count) elements")
 
-            if let extractedTable {
-                report.extractionSource = extractedTable.source
-                report.extractionConfidence = extractedTable.extractionConfidence
-                report.tableRowCount = extractedTable.rowCount
-                report.tableColumnCount = extractedTable.columnCount
-                // Column names bias the next transcription ("tenure", not "tenor").
-                buddyDictationManager.updateContextualKeyterms(extractedTable.headers)
-                print("📊 Table: \(extractedTable.rowCount)×\(extractedTable.columnCount), confidence \(String(format: "%.2f", extractedTable.extractionConfidence)), headers \(extractedTable.headers)")
-            } else {
-                print("📊 No table detected (\(textLines.count) OCR lines)")
-            }
-            if let chart {
-                print("📈 Chart detected at \(chart.boundingBoxInCapturePixels.integral), x ticks \(chart.xTickValues), y ticks \(chart.yTickValues)")
-            }
-
-            // 3. Route. Tasks first ("open spotify and play…"), then Rx, Data, General.
+            // 3. Route. Tasks first ("open spotify and play…"), then Rx, then General.
             let shouldRunAgentMode = selectedMode == .agent
                 || (selectedMode == .automatic && AgentModePipeline.looksLikeTask(transcript))
             if shouldRunAgentMode {
@@ -622,57 +596,6 @@ final class CompanionManager: ObservableObject {
                 return
             }
 
-            let shouldTryDataMode: Bool = {
-                switch selectedMode {
-                case .general, .clinical, .agent: return false
-                case .data: return true
-                case .automatic:
-                    guard let extractedTable else { return false }
-                    return Self.isPlausibleDataTable(extractedTable)
-                }
-            }()
-
-            if shouldTryDataMode {
-                guard let table = extractedTable else {
-                    report.modeUsed = "Data (no table)"
-                    try await speak("i don't see a table on this screen. bring one into view and ask again.")
-                    finishReport(&report, startedAt: interactionStartedAt)
-                    return
-                }
-
-                let planStartedAt = Date()
-                let plan: DataModePlan
-                if isRerunAfterEdit, let previousPlan = lastDataModePlan {
-                    plan = previousPlan
-                } else {
-                    // Keyword routing is instant; the language model is consulted only
-                    // when the user forced Data mode and keywords found nothing.
-                    plan = await dataModePipeline.plan(
-                        transcript: transcript,
-                        table: table,
-                        hasChart: chart != nil,
-                        allowLanguageModelFallback: selectedMode == .data
-                    )
-                }
-                report.planSeconds = Date().timeIntervalSince(planStartedAt)
-                try Task.checkCancellation()
-
-                if plan.task != nil {
-                    lastDataModePlan = plan
-                    try await runDataMode(plan: plan, table: table, chart: chart, capture: capture, report: &report, isRerunAfterEdit: isRerunAfterEdit)
-                    finishReport(&report, startedAt: interactionStartedAt)
-                    return
-                }
-
-                if selectedMode == .data {
-                    report.modeUsed = "Data (not a data question)"
-                    try await speak("ask me what's weird, what drives a column, or to fit a trend, and i'll run a model on this table.")
-                    finishReport(&report, startedAt: interactionStartedAt)
-                    return
-                }
-                // Auto mode: the planner said this is not a data question → General.
-            }
-
             try await runGeneralMode(transcript: transcript, capture: capture, elements: elements, regionOfInterest: regionOfInterest, report: &report)
             finishReport(&report, startedAt: interactionStartedAt)
         } catch is CancellationError {
@@ -683,72 +606,6 @@ final class CompanionManager: ObservableObject {
             report.errorMessage = error.localizedDescription
             finishReport(&report, startedAt: interactionStartedAt)
             try? await speak(Self.spokenErrorMessage(for: error))
-        }
-    }
-
-    private func runDataMode(
-        plan: DataModePlan,
-        table extractedTable: ExtractedTable,
-        chart: ChartRegion?,
-        capture: SounderScreenCapture,
-        report: inout SounderInteractionReport,
-        isRerunAfterEdit: Bool
-    ) async throws {
-        report.modeUsed = "Data"
-        report.analysisTask = plan.task?.rawValue
-
-
-        // Confidence gate: low OCR confidence → get the exact values from the clipboard.
-        var table = extractedTable
-        if table.extractionConfidence < Self.clipboardFallbackConfidenceThreshold, isClipboardFallbackEnabled {
-            do {
-                let clipboardTable = try await ClipboardTableExtractor.copyFrontmostSheetAsTable()
-                table = ClipboardTableExtractor.merge(clipboardTable: clipboardTable, ocrTable: extractedTable)
-                report.extractionSource = table.source
-                report.extractionConfidence = table.extractionConfidence
-                report.tableRowCount = table.rowCount
-                report.tableColumnCount = table.columnCount
-                print("📋 Clipboard merge: \(table.rowCount)×\(table.columnCount) rows, \(table.rowCellBoxes.filter { $0.contains { $0 != nil } }.count) visible")
-            } catch {
-                print("📋 Clipboard fallback unavailable, using OCR table: \(error.localizedDescription)")
-            }
-        }
-        try Task.checkCancellation()
-
-        let analysisStartedAt = Date()
-        let outcome = try await dataModePipeline.run(plan: plan, table: table, chart: chart)
-        report.analysisSeconds = Date().timeIntervalSince(analysisStartedAt)
-        try Task.checkCancellation()
-
-        if let drivers = outcome.response.drivers {
-            report.metricText = "\(drivers.metricName) \(String(format: "%.2f", drivers.metricValue)) · trained \(String(format: "%.1f", drivers.trainSeconds))s"
-        } else if let anomaly = outcome.response.anomaly {
-            report.metricText = "\(anomaly.rows.count) rows flagged · \(anomaly.method)"
-        } else if let fit = outcome.response.fit {
-            report.metricText = "\(fit.modelName) · R² \(String(format: "%.2f", fit.rSquared))"
-        }
-
-        // Draw first, then speak — the judge sees the answer before hearing it.
-        drawingLayerModel.show(outcome.primitives, geometry: capture.geometry, autoClearAfterSeconds: Self.drawingAutoClearSeconds)
-        ClickyAnalytics.trackAIResponseReceived(response: outcome.spokenText)
-        try await speak(isRerunAfterEdit ? "updated. " + outcome.spokenText : outcome.spokenText)
-
-        // Edit-and-re-run: watch the table region; when it changes and settles, redo the same task.
-        if let tableRegion = table.tableBoundingBoxInCapturePixels {
-            let rerunTranscript = report.transcript
-            screenChangeWatcher.start(regionInCapturePixels: tableRegion, geometry: capture.geometry) { [weak self] in
-                guard let self, self.currentResponseTask == nil else { return }
-                print("🔁 Table region changed — re-running \(plan.task?.rawValue ?? "analysis")")
-                self.currentResponseTask = Task { [weak self] in
-                    guard let self else { return }
-                    await self.performInteraction(transcript: rerunTranscript, isRerunAfterEdit: true)
-                    if !Task.isCancelled {
-                        self.currentResponseTask = nil
-                        self.voiceState = .idle
-                        self.scheduleTransientHideIfNeeded()
-                    }
-                }
-            }
         }
     }
 
@@ -1122,8 +979,6 @@ final class CompanionManager: ObservableObject {
             try Task.checkCancellation()
 
             let elements = ScreenElementDetector.makeElements(from: textLines)
-            let table = TableExtractor.extractTable(from: textLines, imageSize: capture.pixelSize)
-            let chart = ChartRegionDetector.detectChart(in: textLines, imageSize: capture.pixelSize, excluding: table?.tableBoundingBoxInCapturePixels)
             let clinicalReading = ClinicalEntityExtractor.extract(from: textLines, lexicon: clinicalLexicon)
 
             // Region of interest from the circle gesture, in capture pixels.
@@ -1146,22 +1001,10 @@ final class CompanionManager: ObservableObject {
             if !clinicalReading.isEmpty {
                 print("💊 Chart: \(clinicalReading.medications.count) meds \(clinicalReading.medications.map { "\($0.name) \($0.doseMilligrams.map { "\($0)mg" } ?? "")×\($0.dosesPerDay ?? 0)" }), \(clinicalReading.conditions.count) conditions \(clinicalReading.conditions.map(\.canonicalName)), labs \(clinicalReading.labs.map { "\($0.key)=\($0.value)" }), age \(clinicalReading.ageYears ?? -1) \(clinicalReading.sex ?? "")")
             }
-            return ScreenAnalysis(capture: capture, textLines: textLines, elements: elements, table: table, chart: chart,
+            return ScreenAnalysis(capture: capture, textLines: textLines, elements: elements,
                                   clinicalReading: clinicalReading, regionOfInterestInCapturePixels: regionOfInterest,
                                   captureSeconds: captureSeconds, ocrSeconds: ocrSeconds)
         }
-    }
-
-    /// Auto mode only treats a grid as data when it looks like one: enough rows,
-    /// typed columns and real header names. IDE side bars and log panes produce
-    /// "tables" of text otherwise.
-    private static func isPlausibleDataTable(_ table: ExtractedTable) -> Bool {
-        guard table.extractionConfidence >= automaticModeTableConfidenceThreshold,
-              table.rowCount >= 4, table.columnCount >= 2 else { return false }
-        let typedColumnCount = table.columnTypes.filter { $0 == .numeric || $0 == .categorical || $0 == .date }.count
-        guard typedColumnCount >= 2 else { return false }
-        let namedHeaderCount = table.headers.filter { !$0.hasPrefix("Column ") }.count
-        return namedHeaderCount >= max(2, table.columnCount / 2)
     }
 
     // MARK: - Calibration self-test
@@ -1189,17 +1032,9 @@ final class CompanionManager: ObservableObject {
                     try ScreenTextRecognizer.recognizeText(in: cgImage)
                 }.value
                 let elements = ScreenElementDetector.makeElements(from: textLines, maximumCount: 400)
-                var primitives = DrawingOpsBuilder.calibrationOutlines(elements)
-                if let table = TableExtractor.extractTable(from: textLines, imageSize: capture.pixelSize),
-                   let tableBox = table.tableBoundingBoxInCapturePixels {
-                    primitives.append(.circle(id: "calibration-table", rectInCapturePixels: tableBox.insetBy(dx: -6, dy: -6), tagNumber: nil, color: .red))
-                    primitives.append(.badge(id: "calibration-table-label", anchorInCapturePixels: CGPoint(x: tableBox.minX, y: tableBox.minY - 14),
-                                             text: "table \(table.rowCount)×\(table.columnCount) · \(Int(table.extractionConfidence * 100))%"))
-                }
+                let primitives = DrawingOpsBuilder.calibrationOutlines(elements)
                 drawingLayerModel.show(primitives, geometry: capture.geometry, autoClearAfterSeconds: 5)
                 var report = SounderInteractionReport(transcript: "(calibration)", modeUsed: "Calibration")
-                report.tableRowCount = TableExtractor.extractTable(from: textLines, imageSize: capture.pixelSize)?.rowCount
-                report.extractionConfidence = TableExtractor.extractTable(from: textLines, imageSize: capture.pixelSize)?.extractionConfidence
                 report.totalSeconds = 0
                 lastInteractionReport = report
                 print("📐 Calibration: \(elements.count) text lines outlined on \(capture.geometry.captureWidthInPixels)×\(capture.geometry.captureHeightInPixels) capture")

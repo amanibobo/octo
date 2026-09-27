@@ -51,10 +51,10 @@ final class NotchPanelManager {
     private var dismissObserver: NSObjectProtocol?
     private var screenChangeObserver: NSObjectProtocol?
 
-    private static let expandedWidth: CGFloat = 340
+    private static let expandedWidth: CGFloat = 420
     /// How far the collapsed island extends beyond the notch on each side and below it.
-    private static let collapsedExtraWidth: CGFloat = 10
-    private static let collapsedExtraHeight: CGFloat = 2
+    private static let collapsedExtraWidth: CGFloat = 6
+    private static let collapsedExtraHeight: CGFloat = 0
 
     /// The built-in display with a notch, if the Mac has one.
     static func notchScreen() -> NSScreen? {
@@ -231,7 +231,6 @@ struct NotchRootView: View {
             } else {
                 collapsedContent
                     .frame(height: notchHeight)
-                    .padding(.bottom, 2)
             }
         }
         .frame(maxWidth: .infinity)
