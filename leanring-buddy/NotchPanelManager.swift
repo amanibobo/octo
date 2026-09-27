@@ -25,6 +25,12 @@ extension Notification.Name {
 private final class NotchPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    /// AppKit normally clamps windows below the menu bar. The island must sit
+    /// flush with the top edge, over the notch, so the clamp is disabled.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        frameRect
+    }
 }
 
 @MainActor
