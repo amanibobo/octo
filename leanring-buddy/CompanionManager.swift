@@ -46,7 +46,9 @@ final class CompanionManager: ObservableObject {
     // MARK: - Sounder state
 
     /// Operating mode chosen in the panel. Persisted.
-    @Published private(set) var selectedMode: SounderMode = SounderMode(rawValue: UserDefaults.standard.string(forKey: "sounderSelectedMode") ?? "") ?? .automatic
+    // Key versioned so older builds' persisted choice (e.g. "General" from testing)
+    // does not silently keep Agent/Rx routing off after an update.
+    @Published private(set) var selectedMode: SounderMode = SounderMode(rawValue: UserDefaults.standard.string(forKey: "sounderSelectedMode_v2") ?? "") ?? .automatic
 
     /// Whether Data mode may fall back to select-all/copy when OCR confidence is low. Persisted.
     @Published private(set) var isClipboardFallbackEnabled: Bool = UserDefaults.standard.object(forKey: "sounderClipboardFallbackEnabled") == nil
@@ -196,7 +198,7 @@ final class CompanionManager: ObservableObject {
 
     func setSelectedMode(_ mode: SounderMode) {
         selectedMode = mode
-        UserDefaults.standard.set(mode.rawValue, forKey: "sounderSelectedMode")
+        UserDefaults.standard.set(mode.rawValue, forKey: "sounderSelectedMode_v2")
     }
 
     func setClipboardFallbackEnabled(_ isEnabled: Bool) {
@@ -980,7 +982,7 @@ final class CompanionManager: ObservableObject {
         gesturePathPointsGlobal = []
         report.totalSeconds = Date().timeIntervalSince(startedAt)
         lastInteractionReport = report
-        print("⏱️ \(report.modeUsed): capture \(String(format: "%.2f", report.captureSeconds))s, ocr \(String(format: "%.2f", report.ocrSeconds))s, plan \(String(format: "%.2f", report.planSeconds))s, analysis \(String(format: "%.2f", report.analysisSeconds))s, total \(String(format: "%.2f", report.totalSeconds))s")
+        print("⏱️ \(report.modeUsed) [picker: \(selectedMode.rawValue)]: capture \(String(format: "%.2f", report.captureSeconds))s, ocr \(String(format: "%.2f", report.ocrSeconds))s, plan \(String(format: "%.2f", report.planSeconds))s, analysis \(String(format: "%.2f", report.analysisSeconds))s, total \(String(format: "%.2f", report.totalSeconds))s")
     }
 
     private static func spokenErrorMessage(for error: Error) -> String {

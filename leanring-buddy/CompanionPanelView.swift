@@ -12,6 +12,8 @@ import SwiftUI
 
 struct CompanionPanelView: View {
     @ObservedObject var companionManager: CompanionManager
+    /// True when hosted inside the notch island: wider, no card background of its own.
+    var isEmbeddedInNotch: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -64,8 +66,8 @@ struct CompanionPanelView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
         }
-        .frame(width: 320)
-        .background(panelBackground)
+        .frame(width: isEmbeddedInNotch ? 400 : 320)
+        .background(isEmbeddedInNotch ? nil : panelBackground)
     }
 
     // MARK: - Header

@@ -30,6 +30,7 @@ struct leanring_buddyApp: App {
 @MainActor
 final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
     private var menuBarPanelManager: MenuBarPanelManager?
+    private var notchPanelManager: NotchPanelManager?
     private let companionManager = CompanionManager()
     private var sparkleUpdaterController: SPUStandardUpdaterController?
 
@@ -43,12 +44,19 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
         ClickyAnalytics.configure()
         ClickyAnalytics.trackAppOpened()
 
-        menuBarPanelManager = MenuBarPanelManager(companionManager: companionManager)
+        // On a MacBook with a notch the buddy lives in the notch; the status item
+        // stays as a fallback (external displays, no notch) and toggles the island.
+        notchPanelManager = NotchPanelManager(companionManager: companionManager)
+        menuBarPanelManager = MenuBarPanelManager(companionManager: companionManager, prefersNotch: notchPanelManager != nil)
         companionManager.start()
         // Auto-open the panel if the user still needs to do something:
         // either they haven't onboarded yet, or permissions were revoked.
         if !companionManager.hasCompletedOnboarding || !companionManager.allPermissionsGranted {
-            menuBarPanelManager?.showPanelOnLaunch()
+            if let notchPanelManager {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { notchPanelManager.setExpanded(true) }
+            } else {
+                menuBarPanelManager?.showPanelOnLaunch()
+            }
         }
         registerAsLoginItemIfNeeded()
         // startSparkleUpdater()

@@ -34,9 +34,12 @@ final class MenuBarPanelManager: NSObject {
     private let companionManager: CompanionManager
     private let panelWidth: CGFloat = 320
     private let panelHeight: CGFloat = 380
+    /// When the notch island exists, the status item toggles it instead of a dropdown.
+    private let prefersNotch: Bool
 
-    init(companionManager: CompanionManager) {
+    init(companionManager: CompanionManager, prefersNotch: Bool = false) {
         self.companionManager = companionManager
+        self.prefersNotch = prefersNotch
         super.init()
         createStatusItem()
 
@@ -105,6 +108,10 @@ final class MenuBarPanelManager: NSObject {
     }
 
     @objc private func statusItemClicked() {
+        if prefersNotch {
+            NotificationCenter.default.post(name: .sounderToggleNotch, object: nil)
+            return
+        }
         if let panel, panel.isVisible {
             hidePanel()
         } else {
