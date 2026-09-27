@@ -125,7 +125,7 @@ Worker vars: `FIREWORKS_CHAT_MODEL`, `FIREWORKS_TRANSCRIPTION_MODEL`, `ELEVENLAB
 | `ClickyAnalytics.swift` | ~140 | PostHog wrapper, opt-in via `PostHogAPIKey`. |
 | `WindowPositionManager.swift` | ~262 | Permission helpers. |
 | `AppBundleConfiguration.swift` | ~28 | Info.plist reader. |
-| `worker/src/index.ts` | ~260 | Cloudflare Worker proxy (routes above). |
+| `worker/src/index.ts` | ~320 | Proxy handler (routes above); runs on Vercel via `worker/api/proxy.ts`. |
 | `services/analysis/*.py` | ~600 | FastAPI analysis service (`app.py`, `schemas.py`, `table_frame.py`, `anomaly.py`, `drivers.py`, `curve_fit.py`, `narration.py`). Tests in `services/tests`. |
 | `services/clinical/*.py` + `data/*.json` | ~450 | Clinical rules (`rules.py`), evidence (`evidence.py`), schemas, lexicon builder, seed data (75 interaction pairs, dosing/renal rules, evidence cache, sponsored slot). Tests in `services/tests/test_clinical.py`. |
 | `services/modal_app.py` | ~30 | Modal deployment of the analysis + clinical service. |
@@ -147,18 +147,22 @@ open leanring-buddy.xcodeproj
 
 **Do NOT run `xcodebuild` from the terminal** — it invalidates TCC (Transparency, Consent, and Control) permissions and the app will need to re-request screen recording, accessibility, etc.
 
-## Cloudflare Worker
+## Proxy (deployed on Vercel; Cloudflare Worker code)
+
+The proxy source is a Cloudflare-style `fetch(request, env)` handler. It is **deployed on Vercel** as an Edge Function: `worker/api/proxy.ts` wraps it with `process.env` as the env bindings, and `worker/vercel.json` rewrites every path to `/api/proxy?path=…` so the handler sees the original path. Production URL: `https://octo-proxy.vercel.app` (project `octo-proxy`, team amanibobos-projects). Info.plist `SounderWorkerBaseURL` points there, so the app no longer needs a local Worker.
 
 ```bash
 cd worker
 npm install
 
-# Local dev: put FIREWORKS_API_KEY=fw_... in worker/.dev.vars (gitignored), then
-npx wrangler dev --port 8787
+# Deploy (already linked; `npx vercel login` first on a new machine)
+npx vercel deploy --prod --yes
+# Secrets/vars live in the Vercel project (ANTHROPIC_API_KEY, FIREWORKS_API_KEY,
+# ELEVENLABS_API_KEY, CLAUDE_MODEL, FIREWORKS_*_MODEL, ELEVENLABS_VOICE_ID, ANALYSIS_BACKEND_URL):
+printf '%s' "$VALUE" | npx vercel env add NAME production --force
 
-# Deploy
-npx wrangler secret put FIREWORKS_API_KEY
-npx wrangler deploy      # then set SounderWorkerBaseURL in Info.plist
+# Local dev alternative (keys in worker/.dev.vars, gitignored), then set SounderWorkerBaseURL to http://127.0.0.1:8787
+npx wrangler dev --port 8787
 ```
 
 ## Analysis service (Python)

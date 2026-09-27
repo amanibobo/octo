@@ -11,7 +11,7 @@
 	<key>VoiceTranscriptionProvider</key>
 	<string>fireworks</string>
 	<key>SounderWorkerBaseURL</key>
-	<string>http://127.0.0.1:8787</string>
+	<string>https://octo-proxy.vercel.app</string>
 	<key>SounderAnalysisBaseURL</key>
 	<string>https://amanibobo1--sounder-analysis-serve.modal.run</string>
 	<key>SounderChatProvider</key>
