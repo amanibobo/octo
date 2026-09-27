@@ -135,21 +135,6 @@ Do **not** build from the terminal with `xcodebuild`: it invalidates the TCC per
 
 Panel toggles: **Clipboard fallback** (⌘A/⌘C when OCR < 90%), **On-device transcription** (Apple Speech, default on; off = Fireworks Whisper), **Show Octo** (persistent vs. transient cursor).
 
-## Status vs. the PRDs
-
-| Item | Status |
-|---|---|
-| Rx: OCR → entities → RxNorm → interactions + dosing + renal → drawn links/underlines/footnotes → spoken | done, verified on the rendered demo chart (6/6 drugs with RXCUI, 5 conditions, labs, age, sex; 3 findings) |
-| Rx: privacy boundary enforced in code | done: payload scanned, `0 raw words` logged per request |
-| Rx: evidence badge + citations + disclosed sponsored slot | done; PubMed live with seeded cache fallback (PubMed returned 500s during the build) |
-| Rx: edit-and-re-run | done (watches the med list region) |
-| Rx: trained NER (BiomedBERT fine-tune) | **trained** on Modal A10G (`services/ner/train_ner.py`, 44 s, 2 epochs, BC5CDR + 6k synthetic med lines). Held-out entity F1: **0.893** on BC5CDR (chemical 0.937, disease 0.843), 1.00 on synthetic med lines (DOSE/FREQ). Weights + `metrics.json` on the `sounder-ner` volume; ONNX export still pending (`optimum` module). On-device extraction in the app is still the dictionary + regex pass; wiring the ONNX model in is the next step |
-| Rx: DDInter database | download host unreachable; 75 curated pairs with mechanisms ship instead (`services/clinical/data/interactions.json`) |
-| Data: anomaly / drivers / fit, clipboard fallback, re-run | done (see Data mode) |
-| General: Set-of-Mark grounding by ID | done |
-| Voice | Apple on-device speech → ElevenLabs flash, pipelined; Fireworks Whisper optional |
-| Modal | analysis + clinical service deployed with one warm container |
-| Worker deploy to Cloudflare, golden-path recording, Devpost, slide | not started |
 
 ## Repo layout
 
