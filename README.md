@@ -1,8 +1,6 @@
-<img src="docs/brand/octo-sprite.svg" width="56" align="left" alt="Octo" style="margin-right:12px">
-
-# Octo
-
-<br clear="left">
+<h1>
+  <img src="docs/brand/octo-sprite.svg" width="44" align="absmiddle" alt="Octo">&nbsp; Octo
+</h1>
 
 **A screen buddy for clinicians: it reads the chart on screen, catches drug interactions and dosing problems, surfaces new evidence, and speaks, without shipping patient text to any model.**
 
