@@ -52,58 +52,55 @@ class OverlayWindow: NSWindow {
     }
 }
 
-/// A little octopus: round head with two eyes and eight wavy tentacles.
-/// Drawn as a single path so it can be filled, rotated and glowed like the
-/// old triangle. The path is normalized to the view's rect.
-struct OctopusShape: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let size = min(rect.width, rect.height)
-        let centerX = rect.midX
-        let headRadius = size * 0.30
-        let headCenter = CGPoint(x: centerX, y: rect.minY + headRadius + size * 0.05)
+/// The buddy sprite: a small rounded green square with two white eyes that
+/// blink every few seconds. Kept as its own view so the blink timer lives
+/// with the eyes and the overlay only positions/rotates the whole sprite.
+struct BuddySquareSpriteView: View {
+    @State private var isBlinking = false
+    @State private var blinkTimer: Timer?
 
-        // Head
-        path.addEllipse(in: CGRect(x: headCenter.x - headRadius, y: headCenter.y - headRadius * 1.05,
-                                   width: headRadius * 2, height: headRadius * 2.1))
-
-        // Eight tentacles fanning out below the head, each a tapered wavy stroke
-        let tentacleTop = headCenter.y + headRadius * 0.55
-        let tentacleLength = size * 0.42
-        for index in 0..<8 {
-            let spread = (CGFloat(index) - 3.5) / 3.5              // -1 ... 1
-            let rootX = centerX + spread * headRadius * 0.85
-            let curl: CGFloat = index % 2 == 0 ? 1 : -1
-            let tipX = rootX + spread * size * 0.22 + curl * size * 0.05
-            let tipY = tentacleTop + tentacleLength * (0.75 + 0.25 * abs(spread))
-            let control1 = CGPoint(x: rootX + spread * size * 0.02, y: tentacleTop + tentacleLength * 0.35)
-            let control2 = CGPoint(x: tipX - curl * size * 0.12, y: tentacleTop + tentacleLength * 0.7)
-            let thickness = size * 0.075
-            path.move(to: CGPoint(x: rootX - thickness, y: tentacleTop))
-            path.addCurve(to: CGPoint(x: tipX, y: tipY), control1: control1, control2: control2)
-            path.addCurve(to: CGPoint(x: rootX + thickness, y: tentacleTop),
-                          control1: CGPoint(x: control2.x + thickness * 1.5, y: control2.y),
-                          control2: CGPoint(x: control1.x + thickness * 1.5, y: control1.y))
-            path.closeSubpath()
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 4.5, style: .continuous)
+                .fill(DS.Colors.overlayCursorBlue)
+            HStack(spacing: 3.5) {
+                eye
+                eye
+            }
+            .offset(y: -1)
         }
-        return path
+        .frame(width: 18, height: 18)
+        .onAppear { scheduleNextBlink() }
+        .onDisappear { blinkTimer?.invalidate() }
     }
-}
 
-/// Eyes are drawn separately in white on top of the octopus body.
-struct OctopusEyesShape: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let size = min(rect.width, rect.height)
-        let headRadius = size * 0.30
-        let headCenter = CGPoint(x: rect.midX, y: rect.minY + headRadius + size * 0.05)
-        let eyeRadius = size * 0.055
-        for offset: CGFloat in [-0.42, 0.42] {
-            path.addEllipse(in: CGRect(x: headCenter.x + offset * headRadius - eyeRadius,
-                                       y: headCenter.y - headRadius * 0.15 - eyeRadius,
-                                       width: eyeRadius * 2, height: eyeRadius * 2))
+    private var eye: some View {
+        Circle()
+            .fill(Color.white)
+            .frame(width: 4.5, height: 4.5)
+            .scaleEffect(x: 1, y: isBlinking ? 0.12 : 1, anchor: .center)
+            .animation(.easeInOut(duration: 0.07), value: isBlinking)
+    }
+
+    /// Blinks at a slightly random cadence so it reads as alive rather than mechanical.
+    private func scheduleNextBlink() {
+        blinkTimer?.invalidate()
+        let delay = Double.random(in: 2.4...4.8)
+        blinkTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { _ in
+            Task { @MainActor in
+                isBlinking = true
+                try? await Task.sleep(nanoseconds: 130_000_000)
+                isBlinking = false
+                // Occasional double blink.
+                if Bool.random() && Double.random(in: 0...1) < 0.3 {
+                    try? await Task.sleep(nanoseconds: 160_000_000)
+                    isBlinking = true
+                    try? await Task.sleep(nanoseconds: 110_000_000)
+                    isBlinking = false
+                }
+                scheduleNextBlink()
+            }
         }
-        return path
     }
 }
 
@@ -327,13 +324,7 @@ struct BlueCursorView: View {
             // During cursor following: fast spring animation for snappy tracking.
             // During navigation: NO implicit animation — the frame-by-frame bezier
             // timer controls position directly at 60fps for a smooth arc flight.
-            ZStack {
-                OctopusShape()
-                    .fill(DS.Colors.overlayCursorBlue)
-                OctopusEyesShape()
-                    .fill(Color.white)
-            }
-                .frame(width: 26, height: 26)
+            BuddySquareSpriteView()
                 .rotationEffect(.degrees(triangleRotationDegrees + 35))
                 .shadow(color: DS.Colors.overlayCursorBlue, radius: 8 + (buddyFlightScale - 1.0) * 20, x: 0, y: 0)
                 .scaleEffect(buddyFlightScale)
