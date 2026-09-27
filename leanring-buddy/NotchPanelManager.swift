@@ -115,14 +115,17 @@ final class NotchPanelManager {
             backing: .buffered,
             defer: false
         )
-        // Above the menu bar so the collapsed pill covers the notch area itself.
-        notchPanel.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue + 2)
+        // Same recipe as NotchDrop / boring.notch: a level well above the status
+        // bar lets the window overlap the menu bar strip and the notch itself.
+        notchPanel.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 8)
         notchPanel.isOpaque = false
         notchPanel.backgroundColor = .clear
         notchPanel.hasShadow = false
         notchPanel.hidesOnDeactivate = false
-        notchPanel.isFloatingPanel = true
         notchPanel.isExcludedFromWindowsMenu = true
+        notchPanel.titleVisibility = .hidden
+        notchPanel.titlebarAppearsTransparent = true
+        notchPanel.isMovable = false
         notchPanel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
         notchPanel.contentView = hosting
         notchPanel.isMovableByWindowBackground = false
@@ -159,6 +162,7 @@ final class NotchPanelManager {
         } else {
             panel.setFrame(frame, display: true)
         }
+        print("🏝️ notch panel: requested \(frame.integral) actual \(panel.frame.integral) screen \(screen.frame.integral) notch \(Int(notchWidth))×\(Int(notchHeight)) at x \(Int(leftArea.maxX)) level \(panel.level.rawValue)")
     }
 
     // MARK: - Hover
