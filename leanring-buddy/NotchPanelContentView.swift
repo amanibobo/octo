@@ -14,7 +14,7 @@ struct NotchPanelContentView: View {
     @ObservedObject var companionManager: CompanionManager
     let onOpenSettings: () -> Void
 
-    private let horizontalPadding: CGFloat = 20
+    private let horizontalPadding: CGFloat = 28
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -54,7 +54,7 @@ struct NotchPanelContentView: View {
                 statusEye
                 statusEye
             }
-            Text("Sounder")
+            Text("Octo")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(.white)
             Spacer()

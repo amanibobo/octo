@@ -143,7 +143,7 @@ enum DS {
         /// (screen overlay vs in-app UI).
         static let overlayCursorBlue = Color(hex: "#22C55E")
 
-        // Green scale (Tailwind Green) — the Sounder brand colour
+        // Green scale (Tailwind Green) — the Octo brand colour
         static let green300 = Color(hex: "#86efac")
         static let green400 = Color(hex: "#4ade80")
         static let green500 = Color(hex: "#22c55e")

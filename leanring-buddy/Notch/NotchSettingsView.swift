@@ -11,7 +11,7 @@ struct NotchSettingsView: View {
     @ObservedObject var companionManager: CompanionManager
     let onBack: () -> Void
 
-    private let horizontalPadding: CGFloat = 20
+    private let horizontalPadding: CGFloat = 28
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -83,7 +83,7 @@ struct NotchSettingsView: View {
                         .font(.system(size: 11.5, weight: .medium))
                         .foregroundColor(DS.Colors.overlayCursorBlue)
                         .pointerCursor()
-                    Button("Quit Sounder") { NSApp.terminate(nil) }
+                    Button("Quit Octo") { NSApp.terminate(nil) }
                         .buttonStyle(.plain)
                         .font(.system(size: 11.5, weight: .medium))
                         .foregroundColor(.white.opacity(0.5))

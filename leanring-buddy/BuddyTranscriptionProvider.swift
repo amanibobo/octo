@@ -57,7 +57,7 @@ enum BuddyTranscriptionProviderFactory {
             return AppleSpeechTranscriptionProvider()
         }
 
-        // Fireworks Whisper through the Worker is the default for Sounder. It needs
+        // Fireworks Whisper through the Worker is the default for Octo. It needs
         // no per-session token, so "configured" only means the Worker URL exists.
         if preferredProvider == .fireworks || preferredProvider == nil {
             return fireworksProvider

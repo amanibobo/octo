@@ -1,8 +1,8 @@
-# Sounder · Rx Sidekick
+# Octo · Rx Sidekick
 
 **A screen buddy for clinicians: it reads the chart on screen, catches drug interactions and dosing problems, surfaces new evidence, and speaks, without shipping patient text to any model.**
 
-Hold `Control + Option` over an EHR chart, a med list, or a PubMed page and ask out loud. Sounder screenshots the display under your cursor, runs on-device OCR and on-device entity extraction (drugs, doses, frequencies, conditions, labs, age, sex), normalizes drugs to RxNorm concepts, and sends **only concept IDs and numbers** to a small service that checks interactions, label dosing and renal rules. The findings are drawn on the chart in place: a red link between interacting drugs, a coloured underline under an out-of-range dose, a "new evidence" badge next to a condition, numbered footnotes with the references. Then it explains in two sentences.
+Hold `Control + Option` over an EHR chart, a med list, or a PubMed page and ask out loud. Octo screenshots the display under your cursor, runs on-device OCR and on-device entity extraction (drugs, doses, frequencies, conditions, labs, age, sex), normalizes drugs to RxNorm concepts, and sends **only concept IDs and numbers** to a small service that checks interactions, label dosing and renal rules. The findings are drawn on the chart in place: a red link between interacting drugs, a coloured underline under an out-of-range dose, a "new evidence" badge next to a condition, numbered footnotes with the references. Then it explains in two sentences.
 
 Built at **HackGT 13** for the Impiricus challenge ("invent the next way we engage HCPs") and the *Oracle of the Deep* track. Data mode (spreadsheets: anomalies, drivers, curve fits) and General mode (ask anything, it points) are the other two modes of the same buddy.
 
@@ -132,7 +132,7 @@ Do **not** build from the terminal with `xcodebuild`: it invalidates the TCC per
 | `VoiceTranscriptionProvider` | `fireworks` | Cloud transcription backend when the panel's "On-device transcription" toggle is off. On-device Apple Speech is the default because Fireworks Whisper measured 2–10 s per clip |
 | `PostHogAPIKey` | unset | Analytics stay off unless set |
 
-Panel toggles: **Clipboard fallback** (⌘A/⌘C when OCR < 90%), **On-device transcription** (Apple Speech, default on; off = Fireworks Whisper), **Show Sounder** (persistent vs. transient cursor).
+Panel toggles: **Clipboard fallback** (⌘A/⌘C when OCR < 90%), **On-device transcription** (Apple Speech, default on; off = Fireworks Whisper), **Show Octo** (persistent vs. transient cursor).
 
 ## Status vs. the PRDs
 

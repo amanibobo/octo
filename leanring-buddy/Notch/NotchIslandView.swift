@@ -47,7 +47,14 @@ struct NotchSilhouetteShape: Shape {
 
 @MainActor
 final class NotchIslandState: ObservableObject {
+    /// Drives the shape/size spring.
     @Published var isExpanded = false
+    /// The card's contents. Cleared with animations disabled *before* the shape
+    /// starts shrinking, so no text is ever seen sliding or fading out.
+    @Published var isCardContentVisible = false
+    /// The eyes/waveform in the collapsed notch. Hidden the instant the island
+    /// starts expanding and faded back in only once it has finished shrinking.
+    @Published var isCollapsedFaceVisible = true
     @Published var isHovering = false
     @Published var isPressed = false
     @Published var isShowingSettings = false
@@ -61,7 +68,10 @@ final class NotchIslandState: ObservableObject {
     var measuredIslandSize: CGSize = .zero
 
     static let expandedWidth: CGFloat = 440
-    static let springAnimation: Animation = .spring(response: 0.5, dampingFraction: 0.75, blendDuration: 1)
+    /// Critically damped springs: no overshoot, so the card never bounces past its edges.
+    static let expandAnimation: Animation = .spring(response: 0.42, dampingFraction: 0.88)
+    static let collapseAnimation: Animation = .spring(response: 0.34, dampingFraction: 0.92)
+    static let springAnimation: Animation = expandAnimation
 
     var collapsedSize: CGSize {
         // Notch + 6pt each side, so the flared top corners hide the physical notch edge.
@@ -73,6 +83,9 @@ struct NotchIslandView: View {
     @ObservedObject var companionManager: CompanionManager
     @ObservedObject var state: NotchIslandState
     let onToggle: () -> Void
+    /// Natural height of the card content, measured so the island's height is an
+    /// explicit, animatable number in both states (nil → value does not interpolate).
+    @State private var measuredCardContentHeight: CGFloat = 320
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -91,14 +104,23 @@ struct NotchIslandView: View {
             shape
                 .fill(Color.black)
                 .overlay(shape.stroke(Color.white.opacity(state.isExpanded ? 0.12 : 0.0), lineWidth: 1))
-                .shadow(color: .black.opacity(state.isExpanded ? 0.35 : 0), radius: 22, x: 0, y: 10)
 
-            content
-                .mask(shape.padding(.horizontal, 4).padding(.bottom, 3))
+            // Both layers stay in the tree; only their opacity changes, so the
+            // island's size animation is never tied to views entering or leaving.
+            cardContent
+                .opacity(state.isCardContentVisible ? 1 : 0)
+                .allowsHitTesting(state.isExpanded && state.isCardContentVisible)
+
+            collapsedContent
+                .frame(width: state.collapsedSize.width, height: state.collapsedSize.height)
+                .opacity(state.isCollapsedFaceVisible ? 1 : 0)
+                .allowsHitTesting(false)
         }
         .frame(width: state.isExpanded ? NotchIslandState.expandedWidth : state.collapsedSize.width,
-               height: state.isExpanded ? nil : state.collapsedSize.height)
-        .fixedSize(horizontal: false, vertical: state.isExpanded)
+               height: state.isExpanded ? measuredCardContentHeight : state.collapsedSize.height,
+               alignment: .top)
+        .clipShape(shape)
+        .shadow(color: .black.opacity(state.isExpanded ? 0.35 : 0), radius: 22, x: 0, y: 10)
         .background(
             GeometryReader { islandGeometry in
                 Color.clear
@@ -109,34 +131,41 @@ struct NotchIslandView: View {
         .scaleEffect(state.isPressed ? 0.975 : 1, anchor: .top)
         .contentShape(shape)
         .onTapGesture { onToggle() }
-        .animation(NotchIslandState.springAnimation, value: state.isExpanded)
         .animation(.spring(response: 0.25, dampingFraction: 0.7), value: state.isPressed)
     }
 
-    @ViewBuilder
-    private var content: some View {
-        if state.isExpanded {
-            VStack(spacing: 0) {
-                if state.isShowingSettings {
-                    NotchSettingsView(companionManager: companionManager, onBack: {
-                        withAnimation(NotchIslandState.springAnimation) { state.isShowingSettings = false }
-                    })
-                } else if companionManager.hasCompletedOnboarding && companionManager.allPermissionsGranted {
-                    NotchPanelContentView(companionManager: companionManager, onOpenSettings: {
-                        withAnimation(NotchIslandState.springAnimation) { state.isShowingSettings = true }
-                    })
-                } else {
-                    CompanionPanelView(companionManager: companionManager, isEmbeddedInNotch: true)
-                }
+    /// The expanded card (or its settings page). Its natural height is measured
+    /// and fed back into the island frame.
+    private var cardContent: some View {
+        VStack(spacing: 0) {
+            if state.isShowingSettings {
+                NotchSettingsView(companionManager: companionManager, onBack: {
+                    withAnimation(NotchIslandState.expandAnimation) { state.isShowingSettings = false }
+                })
+            } else if companionManager.hasCompletedOnboarding && companionManager.allPermissionsGranted {
+                NotchPanelContentView(companionManager: companionManager, onOpenSettings: {
+                    withAnimation(NotchIslandState.expandAnimation) { state.isShowingSettings = true }
+                })
+            } else {
+                CompanionPanelView(companionManager: companionManager, isEmbeddedInNotch: true)
             }
-            .padding(.top, state.notchHeight)
-            .frame(width: NotchIslandState.expandedWidth)
-            .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
-        } else {
-            collapsedContent
-                .frame(width: state.collapsedSize.width, height: state.collapsedSize.height)
-                .transition(.opacity)
         }
+        .padding(.top, state.notchHeight)
+        .frame(width: NotchIslandState.expandedWidth)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(
+            GeometryReader { cardGeometry in
+                Color.clear
+                    .onAppear { measuredCardContentHeight = cardGeometry.size.height }
+                    .onChange(of: cardGeometry.size.height) { _, newHeight in
+                        // Content changes (mode description, settings page) re-size
+                        // the open card with the same spring as expanding.
+                        withAnimation(state.isExpanded ? NotchIslandState.expandAnimation : nil) {
+                            measuredCardContentHeight = newHeight
+                        }
+                    }
+            }
+        )
     }
 
     /// Eyes when idle, waveform while listening, a pulse while thinking, bouncing eyes while talking.

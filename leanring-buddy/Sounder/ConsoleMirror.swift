@@ -37,7 +37,7 @@ enum ConsoleMirror {
         FileManager.default.createFile(atPath: logFileURL.path, contents: nil)
         let logHandle = try? FileHandle(forWritingTo: logFileURL)
         logHandle?.seekToEndOfFile()
-        let header = "\n===== Sounder launched \(Date()) =====\n".data(using: .utf8)!
+        let header = "\n===== Octo launched \(Date()) =====\n".data(using: .utf8)!
         logHandle?.write(header)
 
         let savedStandardOutput = originalStandardOutput

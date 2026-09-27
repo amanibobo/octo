@@ -2,7 +2,7 @@
 //  NotchPanelManager.swift
 //  leanring-buddy
 //
-//  Sounder lives in the MacBook notch. Following DynamicNotch's recipe: one
+//  Octo lives in the MacBook notch. Following DynamicNotch's recipe: one
 //  large transparent canvas panel pinned to the top-centre of the notch screen,
 //  the island drawn in SwiftUI inside it, expansion as an animated SwiftUI size
 //  change (the window itself never resizes), and the window delegated to a
@@ -96,13 +96,26 @@ final class NotchPanelManager {
         collapseWorkItem = nil
         guard islandState.isExpanded != expanded else { return }
         print("🏝️ notch \(expanded ? "expand" : "collapse")")
-        withAnimation(NotchIslandState.springAnimation) {
-            islandState.isExpanded = expanded
-            if !expanded { islandState.isShowingSettings = false }
-        }
+
+        var withoutAnimation = Transaction()
+        withoutAnimation.disablesAnimations = true
+
         if expanded {
+            // Face off instantly, shape springs open, card content fades in as the
+            // shape nears its final size.
+            withTransaction(withoutAnimation) { islandState.isCollapsedFaceVisible = false }
+            withAnimation(NotchIslandState.expandAnimation) { islandState.isExpanded = true }
+            withAnimation(.easeOut(duration: 0.16).delay(0.14)) { islandState.isCardContentVisible = true }
             panel?.makeKey()
         } else {
+            // Card content off instantly (no fade, no slide), then the shape shrinks,
+            // then the face fades back in once the shrink has settled.
+            withTransaction(withoutAnimation) {
+                islandState.isCardContentVisible = false
+                islandState.isShowingSettings = false
+            }
+            withAnimation(NotchIslandState.collapseAnimation) { islandState.isExpanded = false }
+            withAnimation(.easeOut(duration: 0.14).delay(0.24)) { islandState.isCollapsedFaceVisible = true }
             panel?.resignKey()
         }
     }
@@ -208,7 +221,6 @@ final class NotchPanelManager {
         let isInside = hoverZone.contains(mouseLocation)
         if isInside != islandState.isHovering {
             islandState.isHovering = isInside
-            print("🏝️ hover \(isInside ? "in" : "out") · mouse (\(Int(mouseLocation.x)), \(Int(mouseLocation.y))) · island \(islandRect.integral) · measured \(islandState.measuredIslandSize) · expanded \(islandState.isExpanded)")
         }
 
         if isInside {

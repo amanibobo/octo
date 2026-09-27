@@ -227,7 +227,7 @@ struct BlueCursorView: View {
     /// Only during the return flight can cursor movement cancel the animation.
     @State private var isReturningToCursor: Bool = false
 
-    private let fullWelcomeMessage = "hey! i'm sounder"
+    private let fullWelcomeMessage = "hey! i'm octo"
 
     private let navigationPointerPhrases = [
         "right here!",

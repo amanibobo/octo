@@ -80,7 +80,7 @@ struct CompanionPanelView: View {
                     .frame(width: 8, height: 8)
                     .shadow(color: statusDotColor.opacity(0.6), radius: 4)
 
-                Text("Sounder")
+                Text("Octo")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(DS.Colors.textPrimary)
             }
@@ -118,7 +118,7 @@ struct CompanionPanelView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else if companionManager.allPermissionsGranted {
-            Text("You're all set. Hit Start to meet Sounder.")
+            Text("You're all set. Hit Start to meet Octo.")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(DS.Colors.textSecondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -127,7 +127,7 @@ struct CompanionPanelView: View {
                 Text("Permissions needed")
                     .font(.system(size: 12, weight: .bold))
                     .foregroundColor(DS.Colors.textSecondary)
-                Text("Some permissions were revoked. Grant all four below to keep using Sounder.")
+                Text("Some permissions were revoked. Grant all four below to keep using Octo.")
                     .font(.system(size: 11))
                     .foregroundColor(DS.Colors.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -135,14 +135,14 @@ struct CompanionPanelView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Hi, this is Sounder.")
+                Text("Hi, this is Octo.")
                     .font(.system(size: 12, weight: .bold))
                     .foregroundColor(DS.Colors.textSecondary)
                 Text("A screen buddy that reads the table on your screen, trains a model on it in seconds, and draws the answer right on the screen.")
                     .font(.system(size: 11))
                     .foregroundColor(DS.Colors.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("Nothing runs in the background. Sounder only takes a screenshot when you hold the hotkey, and the table never leaves your machine except as numbers sent to your own analysis backend.")
+                Text("Nothing runs in the background. Octo only takes a screenshot when you hold the hotkey, and the table never leaves your machine except as numbers sent to your own analysis backend.")
                     .font(.system(size: 11))
                     .foregroundColor(DS.Colors.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -487,7 +487,7 @@ struct CompanionPanelView: View {
             )
 
             toggleRow(
-                label: "Show Sounder",
+                label: "Show Octo",
                 subtitle: "Keep the cursor buddy visible between questions",
                 iconName: "cursorarrow",
                 isOn: companionManager.isClickyCursorEnabled,
@@ -556,7 +556,7 @@ struct CompanionPanelView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "power")
                         .font(.system(size: 11, weight: .medium))
-                    Text("Quit Sounder")
+                    Text("Quit Octo")
                         .font(.system(size: 12, weight: .medium))
                 }
                 .foregroundColor(DS.Colors.textTertiary)

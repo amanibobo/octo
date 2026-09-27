@@ -58,7 +58,7 @@ private final class FireworksAudioTranscriptionSession: BuddyStreamingTranscript
     private let onFinalTranscriptReady: (String) -> Void
     private let onError: (Error) -> Void
 
-    private let stateQueue = DispatchQueue(label: "com.sounder.fireworks.transcription")
+    private let stateQueue = DispatchQueue(label: "com.octo.fireworks.transcription")
     private let audioPCM16Converter = BuddyPCM16AudioConverter(targetSampleRate: Double(targetSampleRate))
     private let urlSession: URLSession
 

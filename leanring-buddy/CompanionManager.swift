@@ -43,7 +43,7 @@ final class CompanionManager: ObservableObject {
     /// Whether the blue cursor overlay is currently visible on screen.
     @Published private(set) var isOverlayVisible: Bool = false
 
-    // MARK: - Sounder state
+    // MARK: - Octo state
 
     /// Operating mode chosen in the panel. Persisted.
     // Key versioned so older builds' persisted choice (e.g. "General" from testing)
@@ -262,7 +262,7 @@ final class CompanionManager: ObservableObject {
 
     func start() {
         refreshAllPermissions()
-        print("🔑 Sounder start — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission), onboarded: \(hasCompletedOnboarding)")
+        print("🔑 Octo start — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission), onboarded: \(hasCompletedOnboarding)")
         startPermissionPolling()
         startServiceHealthPolling()
         // Vision's first text request loads models (several seconds). Pay it now, off-main.
@@ -294,7 +294,7 @@ final class CompanionManager: ObservableObject {
 
         Task {
             try? await Task.sleep(nanoseconds: 2_500_000_000)
-            try? await speechOutput.speakText("hey, i'm sounder. open a spreadsheet, hold control and option, and ask me what's weird or what drives a column.")
+            try? await speechOutput.speakText("hey, i'm octo. open a spreadsheet, hold control and option, and ask me what's weird or what drives a column.")
         }
     }
 
@@ -532,7 +532,7 @@ final class CompanionManager: ObservableObject {
                     },
                     submitDraftText: { [weak self] finalTranscript in
                         self?.lastTranscript = finalTranscript
-                        print("🗣️ Sounder received transcript: \(finalTranscript)")
+                        print("🗣️ Octo received transcript: \(finalTranscript)")
                         ClickyAnalytics.trackUserMessageSent(transcript: finalTranscript)
                         self?.runInteraction(transcript: finalTranscript)
                     }
@@ -638,7 +638,7 @@ final class CompanionManager: ObservableObject {
             // User spoke again — interaction was interrupted.
         } catch {
             ClickyAnalytics.trackResponseError(error: error.localizedDescription)
-            print("⚠️ Sounder interaction error: \(error)")
+            print("⚠️ Octo interaction error: \(error)")
             report.errorMessage = error.localizedDescription
             finishReport(&report, startedAt: interactionStartedAt)
             try? await speak(Self.spokenErrorMessage(for: error))
@@ -1127,7 +1127,7 @@ final class CompanionManager: ObservableObject {
 
     // MARK: - Transient cursor
 
-    /// If the cursor is in transient mode (user toggled "Show Sounder" off), waits for
+    /// If the cursor is in transient mode (user toggled "Show Octo" off), waits for
     /// speech and any pointing animation to finish, then fades out the overlay.
     private func scheduleTransientHideIfNeeded() {
         guard !isClickyCursorEnabled && isOverlayVisible else { return }

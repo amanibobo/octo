@@ -36,8 +36,8 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         ConsoleMirror.start()
-        print("🎯 Sounder: Starting...")
-        print("🎯 Sounder: Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown")")
+        print("🎯 Octo: Starting...")
+        print("🎯 Octo: Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown")")
 
         UserDefaults.standard.register(defaults: ["NSInitialToolTipDelay": 0])
 
@@ -74,9 +74,9 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
         if loginItemService.status != .enabled {
             do {
                 try loginItemService.register()
-                print("🎯 Sounder: Registered as login item")
+                print("🎯 Octo: Registered as login item")
             } catch {
-                print("⚠️ Sounder: Failed to register as login item: \(error)")
+                print("⚠️ Octo: Failed to register as login item: \(error)")
             }
         }
     }
@@ -92,7 +92,7 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
         do {
             try updaterController.updater.start()
         } catch {
-            print("⚠️ Sounder: Sparkle updater failed to start: \(error)")
+            print("⚠️ Octo: Sparkle updater failed to start: \(error)")
         }
     }
 }

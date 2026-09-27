@@ -1,4 +1,4 @@
-# Sounder - Agent Instructions
+# Octo - Agent Instructions
 
 <!-- This is the single source of truth for all AI coding agents. CLAUDE.md is a symlink to this file. -->
 <!-- AGENTS.md spec: https://github.com/agentsmd/agents.md — supported by Claude Code, Cursor, Copilot, Gemini CLI, and others. -->
@@ -60,7 +60,7 @@ Worker vars: `FIREWORKS_CHAT_MODEL`, `FIREWORKS_TRANSCRIPTION_MODEL`, `ELEVENLAB
 
 **Shared URLSession for AssemblyAI**: A single long-lived `URLSession` is shared across all AssemblyAI streaming sessions (owned by the provider, not the session). Creating and invalidating a URLSession per session corrupts the OS connection pool and causes "Socket is not connected" errors after a few rapid reconnections.
 
-**Transient Cursor Mode**: When "Show Sounder" is off, pressing the hotkey fades in the cursor overlay for the duration of the interaction (recording → response → TTS → optional pointing), then fades it out automatically after 1 second of inactivity.
+**Transient Cursor Mode**: When "Show Octo" is off, pressing the hotkey fades in the cursor overlay for the duration of the interaction (recording → response → TTS → optional pointing), then fades it out automatically after 1 second of inactivity.
 
 **Coordinate Contract**: Every box from OCR/extraction/analysis is in capture pixels (top-left origin of the captured display image). `CaptureGeometry` converts to overlay points (`pixel × displayPoints / capturePixels`) and to global AppKit coordinates for cursor pointing. The panel's "Calibrate overlay" outlines every OCR line for 5 s as a visual self-test.
 
@@ -119,7 +119,7 @@ Worker vars: `FIREWORKS_CHAT_MODEL`, `FIREWORKS_TRANSCRIPTION_MODEL`, `ELEVENLAB
 | `BuddyAudioConversionSupport.swift` | ~108 | PCM16 conversion + WAV builder. |
 | `GlobalPushToTalkShortcutMonitor.swift` | ~132 | Listen-only CGEvent tap for ctrl+option. |
 | `ElevenLabsTTSClient.swift` | ~81 | Optional TTS via Worker `/tts`. |
-| `CompanionScreenCaptureUtility.swift` | ~132 | Legacy multi-monitor downscaled capture (unused by the Sounder pipeline). |
+| `CompanionScreenCaptureUtility.swift` | ~132 | Legacy multi-monitor downscaled capture (unused by the Octo pipeline). |
 | `CompanionResponseOverlay.swift` | ~217 | Legacy response bubble (unused). |
 | `DesignSystem.swift` | ~880 | `DS.Colors`, `DS.CornerRadius`, button styles. |
 | `ClickyAnalytics.swift` | ~140 | PostHog wrapper, opt-in via `PostHogAPIKey`. |
