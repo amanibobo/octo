@@ -63,6 +63,16 @@ final class CompanionManager: ObservableObject {
     @Published private(set) var isWorkerReachable = false
     @Published private(set) var lastInteractionReport: SounderInteractionReport?
 
+    /// Caption: the spoken text, revealed progressively at speaking pace so the
+    /// person can read along (the model returns whole answers, not tokens).
+    @Published private(set) var captionText: String = ""
+    private var captionFullText = ""
+    private var captionRevealProgress: Double = 0
+    private var captionRevealTimer: Timer?
+    private var captionHideTask: Task<Void, Never>?
+    private static let captionCharactersPerSecond: Double = 15
+    private static let captionRevealTicksPerSecond: Double = 30
+
     /// Spatial context: cursor positions (global AppKit coords) sampled while the
     /// hotkey is held. Drawn as a trail by the overlay; the bounding box becomes
     /// the region of interest for the question when it is big enough to be a gesture.
@@ -478,6 +488,7 @@ final class CompanionManager: ObservableObject {
             screenChangeWatcher.stop()
             drawingLayerModel.clear()
             clearDetectedElementLocation()
+            clearCaption()
 
             ClickyAnalytics.trackPushToTalkStarted()
             beginGestureSampling()
@@ -665,6 +676,7 @@ final class CompanionManager: ObservableObject {
 
         // Speak a filler right away so the user hears something within a second.
         if !isRerunAfterEdit {
+            presentCaption(plan.fillerText + "…")
             try? await speechOutput.speakText(plan.fillerText)
         }
 
@@ -746,7 +758,7 @@ final class CompanionManager: ObservableObject {
         switch resolvedIntent {
         case .evidence(let conditionQuery):
             report.analysisTask = "evidence"
-            if !isRerunAfterEdit { try? await speechOutput.speakText("pulling the latest evidence") }
+            if !isRerunAfterEdit { presentCaption("pulling the latest evidence…"); try? await speechOutput.speakText("pulling the latest evidence") }
             // Circling a single drug and asking "what's new on this?" scopes the evidence to it.
             let circledDrug = (regionOfInterest != nil && reading.medications.count == 1) ? reading.medications[0].name : nil
             outcome = try await clinicalModePipeline.evidence(reading: reading, conditionQuery: conditionQuery, drug: circledDrug)
@@ -756,7 +768,7 @@ final class CompanionManager: ObservableObject {
                 try await speak("i see diagnoses but no medication list on this screen.")
                 return
             }
-            if !isRerunAfterEdit { try? await speechOutput.speakText("checking the med list") }
+            if !isRerunAfterEdit { presentCaption("checking the med list…"); try? await speechOutput.speakText("checking the med list") }
             outcome = try await clinicalModePipeline.checkMedications(reading: reading)
         }
         report.analysisSeconds = Date().timeIntervalSince(analysisStartedAt)
@@ -798,6 +810,7 @@ final class CompanionManager: ObservableObject {
     ) async throws {
         report.modeUsed = regionOfInterest == nil ? "General" : "General (circled)"
         // Instant (pre-synthesized) so the wait for the vision model is not silent.
+        presentCaption("let me look…")
         try? await speechOutput.speakText("let me look")
         let answerStartedAt = Date()
         let answer = try await generalModePipeline.answer(
@@ -836,9 +849,11 @@ final class CompanionManager: ObservableObject {
     }
 
     /// Speaks and flips the cursor into the responding state while audio plays.
+    /// The same text is shown as a caption beside the buddy, revealed at speaking pace.
     private func speak(_ text: String) async throws {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedText.isEmpty else { return }
+        presentCaption(trimmedText)
         do {
             try await speechOutput.speakText(trimmedText)
             voiceState = .responding
@@ -867,6 +882,51 @@ final class CompanionManager: ObservableObject {
             return "the model couldn't run on this table. \(error.localizedDescription)"
         }
         return "something went wrong on my end. try that once more."
+    }
+
+    // MARK: - Caption
+
+    private func presentCaption(_ text: String) {
+        captionRevealTimer?.invalidate()
+        captionHideTask?.cancel()
+        captionFullText = text
+        captionRevealProgress = 0
+        captionText = ""
+
+        captionRevealTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / Self.captionRevealTicksPerSecond, repeats: true) { [weak self] timer in
+            Task { @MainActor [weak self] in
+                guard let self else { timer.invalidate(); return }
+                self.captionRevealProgress += Self.captionCharactersPerSecond / Self.captionRevealTicksPerSecond
+                let revealedCount = min(self.captionFullText.count, Int(self.captionRevealProgress))
+                self.captionText = String(self.captionFullText.prefix(revealedCount))
+                if revealedCount >= self.captionFullText.count {
+                    timer.invalidate()
+                    self.scheduleCaptionHide()
+                }
+            }
+        }
+    }
+
+    /// Keeps the caption up while the voice is still playing, then fades it.
+    private func scheduleCaptionHide() {
+        captionHideTask?.cancel()
+        captionHideTask = Task { [weak self] in
+            while let self, self.speechOutput.isPlaying, !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.clearCaption()
+        }
+    }
+
+    private func clearCaption() {
+        captionRevealTimer?.invalidate()
+        captionRevealTimer = nil
+        captionHideTask?.cancel()
+        captionHideTask = nil
+        captionFullText = ""
+        captionText = ""
     }
 
     // MARK: - Spatial context (circle gesture)

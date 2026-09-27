@@ -130,6 +130,13 @@ struct SizePreferenceKey: PreferenceKey {
     }
 }
 
+struct CaptionBubbleSizePreferenceKey: PreferenceKey {
+    static var defaultValue: CGSize = .zero
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        value = nextValue()
+    }
+}
+
 struct NavigationBubbleSizePreferenceKey: PreferenceKey {
     static var defaultValue: CGSize = .zero
     static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
@@ -213,6 +220,9 @@ struct BlueCursorView: View {
     /// Starts at 0.5 and springs to 1.0 when the first character appears.
     @State private var navigationBubbleScale: CGFloat = 1.0
 
+    /// Measured size of the caption bubble so it can be placed beside the buddy.
+    @State private var captionBubbleSize: CGSize = .zero
+
     /// True when the buddy is flying BACK to the cursor after pointing.
     /// Only during the return flight can cursor movement cancel the animation.
     @State private var isReturningToCursor: Bool = false
@@ -278,6 +288,35 @@ struct BlueCursorView: View {
                     .onPreferenceChange(SizePreferenceKey.self) { newSize in
                         bubbleSize = newSize
                     }
+            }
+
+            // Caption: what the buddy is saying, revealed at speaking pace.
+            if buddyIsVisibleOnThisScreen && !companionManager.captionText.isEmpty {
+                Text(companionManager.captionText)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white)
+                    .lineSpacing(2)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: 380, alignment: .leading)
+                    .fixedSize(horizontal: true, vertical: true)
+                    .background(
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .fill(Color.black.opacity(0.82))
+                            .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(DS.Colors.overlayCursorBlue.opacity(0.8), lineWidth: 1))
+                            .shadow(color: Color.black.opacity(0.35), radius: 10, x: 0, y: 4)
+                    )
+                    .overlay(
+                        GeometryReader { geo in
+                            Color.clear.preference(key: CaptionBubbleSizePreferenceKey.self, value: geo.size)
+                        }
+                    )
+                    .position(captionBubblePosition)
+                    .animation(.spring(response: 0.25, dampingFraction: 0.75, blendDuration: 0), value: cursorPosition)
+                    .onPreferenceChange(CaptionBubbleSizePreferenceKey.self) { newSize in
+                        captionBubbleSize = newSize
+                    }
+                    .allowsHitTesting(false)
             }
 
             // Navigation pointer bubble — shown when buddy arrives at a detected element.
@@ -403,6 +442,22 @@ struct BlueCursorView: View {
 
             startNavigatingToElement(screenLocation: screenLocation)
         }
+    }
+
+    /// Caption sits below-right of the buddy, flipping to the left / above when it
+    /// would run off the screen.
+    private var captionBubblePosition: CGPoint {
+        let width = max(captionBubbleSize.width, 40)
+        let height = max(captionBubbleSize.height, 20)
+        var x = cursorPosition.x + 14 + width / 2
+        var y = cursorPosition.y + 26 + height / 2
+        if x + width / 2 > screenFrame.width - 12 {
+            x = cursorPosition.x - 14 - width / 2
+        }
+        if y + height / 2 > screenFrame.height - 12 {
+            y = cursorPosition.y - 26 - height / 2
+        }
+        return CGPoint(x: max(width / 2 + 12, x), y: max(height / 2 + 12, y))
     }
 
     /// Whether the buddy triangle should be visible on this screen.
