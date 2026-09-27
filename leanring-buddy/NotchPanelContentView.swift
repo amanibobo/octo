@@ -12,7 +12,9 @@ import SwiftUI
 
 struct NotchPanelContentView: View {
     @ObservedObject var companionManager: CompanionManager
+    @ObservedObject var userContextStore: UserContextStore
     let onOpenSettings: () -> Void
+    let onOpenContext: () -> Void
 
     private let horizontalPadding: CGFloat = 28
 
@@ -184,6 +186,23 @@ struct NotchPanelContentView: View {
             }
             .padding(.leading, 6)
             Spacer()
+            Button(action: onOpenContext) {
+                HStack(spacing: 5) {
+                    Image(systemName: "paperclip")
+                        .font(.system(size: 12, weight: .medium))
+                    if !userContextStore.items.isEmpty {
+                        Text("\(userContextStore.items.count)")
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    }
+                }
+                .foregroundColor(userContextStore.items.isEmpty ? .white.opacity(0.6) : DS.Colors.overlayCursorBlue)
+                .frame(height: 28)
+                .padding(.horizontal, userContextStore.items.isEmpty ? 9 : 10)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(0.08)))
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+            .help("Context · notes, links and images Octo keeps in mind")
             Button(action: onOpenSettings) {
                 Image(systemName: "gearshape")
                     .font(.system(size: 12, weight: .medium))

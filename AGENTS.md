@@ -18,7 +18,7 @@ Voice: Fireworks Whisper (`whisper-v3-turbo`) for speech-to-text, `AVSpeechSynth
 - **App Type**: Menu bar-only (`LSUIElement=true`), no dock icon or main window
 - **Framework**: SwiftUI (macOS native) with AppKit bridging for menu bar panel and cursor overlay
 - **Pattern**: MVVM with `@StateObject` / `@Published` state management
-- **LLM**: Fireworks (default `accounts/fireworks/routers/kimi-k3-fast`: image input + JSON-schema output, ~1.3 s) via Worker `/chat`, OpenAI-compatible body. Planner and General-mode answers are JSON-schema constrained.
+- **LLM**: Claude (`claude-opus-5-5` via the proxy `/claude`, Anthropic Messages API; fast mode is not enabled for this org) for General, Rx narration, Agent and media lookup. Fireworks kimi-k3-fast remains behind `/chat`. General-mode answers and Agent actions are JSON-schema constrained.
 - **Speech-to-Text**: Apple on-device Speech by default (transcript ready at key-up; panel toggle "On-device transcription"). Fireworks Whisper via Worker `/transcribe` when off (measured 2–10 s per clip, erratic). AssemblyAI/OpenAI providers kept but unused.
 - **Text-to-Speech**: ElevenLabs `eleven_flash_v2_5` via Worker `/tts` by default (`ElevenLabsTTSClient`: sentence-pipelined queue, fixed filler phrases pre-synthesized at launch). Alternatives: `kokoro` (Kokoro-82M on Modal, `services/modal_tts.py`, ~4 s per long sentence on CPU) and `system` (AVSpeechSynthesizer, never picks macOS novelty voices).
 - **Latency rules**: capture+OCR start at hotkey release and run during transcription; keyword planner first, LLM planner only in forced Data mode; `reasoning_effort: none`; 1280px Set-of-Mark image, ≤100 elements; LLM narration off. Auto mode enters Data only for tables passing `isPlausibleDataTable` (≥4 rows, ≥2 typed columns, real header names, confidence ≥ 0.6).
@@ -54,6 +54,10 @@ Worker vars: `FIREWORKS_CHAT_MODEL`, `FIREWORKS_TRANSCRIPTION_MODEL`, `ELEVENLAB
 
 **Notch Island (DynamicNotch model)**: On Macs with a notch, `NotchPanelManager` replaces the dropdown. One large transparent canvas `NSPanel` (640×720, `.borderless, .nonactivatingPanel`, level `mainMenu + 3`, `constrainFrameRect` override, `acceptsMouseMovedEvents`) is pinned to the top-centre of the notch screen and delegated to a private SkyLight space (`SkyLightOperator`, dlsym'd, silent fallback) so it renders above the menu bar. The island is pure SwiftUI inside it (`NotchIslandView`): a `NotchSilhouetteShape` with animatable top/bottom corner radii that morphs between the collapsed notch (notch + 12 pt wide) and the 440 pt card with a spring (response 0.5, damping 0.75); the window never resizes. A 30 Hz timer expands on hover (0.10 s dwell) and collapses 0.55 s after the pointer leaves; a global click monitor collapses on outside clicks. The view reports its rendered size (`measuredIslandSize`) so the hover zone tracks the animation. Notch metrics come from `safeAreaInsets.top` and the gap between `auxiliaryTopLeftArea`/`auxiliaryTopRightArea`.
 
+**Pinned context**: `UserContextStore` (Application Support/Octo/Context) holds notes, links (fetched once, kept as a title + plain-text excerpt) and images (downscaled JPEG) the user adds from the notch's Context page (paperclip button: text field, Paste, Image…, drag-and-drop). `CompanionManager` snapshots `promptBundle()` at the start of every interaction and passes it to General (text + up to 2 images after the screenshot), Agent (text), Rx narration (text; its numbers are allowed in the verified narration) and media lookup. It never enters the Rx concept payload.
+
+**Rx draws nothing**: findings are spoken (and listed in the report); the chart stays clean. Evidence offers a clickable card instead of badges.
+
 **Cursor Overlay**: A full-screen transparent `NSPanel` hosts the blue cursor companion. It's non-activating, joins all Spaces, and never steals focus. The cursor position, response text, waveform, and pointing animations all render in this overlay via SwiftUI through `NSHostingView`.
 
 **Global Push-To-Talk Shortcut**: Background push-to-talk uses a listen-only `CGEvent` tap instead of an AppKit global monitor so modifier-based shortcuts like `ctrl + option` are detected more reliably while the app is running in the background.
@@ -84,6 +88,8 @@ Worker vars: `FIREWORKS_CHAT_MODEL`, `FIREWORKS_TRANSCRIPTION_MODEL`, `ELEVENLAB
 | `Notch/NotchIslandView.swift` | ~230 | `NotchSilhouetteShape`, `NotchIslandState`, island view (collapsed eyes/waveform/pulse, expanded card or settings). |
 | `Notch/NotchSettingsView.swift` | ~145 | Settings page: hotkey chord, on-device transcription, captions, buddy visibility, clipboard fallback, service status, calibrate, quit. |
 | `Notch/SkyLightOperator.swift` | ~75 | Private SkyLight space at max level for the notch window (dlsym, optional). |
+| `Notch/NotchContextView.swift` | ~270 | Context page: pinned items list, add field, Paste / Image… buttons, drag-and-drop. |
+| `Sounder/Context/UserContextStore.swift` | ~270 | Persisted notes/links/images + `promptBundle()` for the pipelines. |
 | `CompanionPanelView.swift` | ~560 | Panel UI: permissions, Start, mode picker (Auto/General/Data), service status, last-run latency/confidence readout, options (clipboard fallback, offline voice, show cursor, calibrate). |
 | `OverlayWindow.swift` | ~780 | Full-screen transparent overlay hosting the blue cursor and `DrawingLayerView`. Cursor animation, bezier pointing, multi-monitor. |
 | `Sounder/SounderConfiguration.swift` | ~40 | Info.plist-backed config: Worker URL, analysis URL, chat model, speech provider, LLM narration flag. |

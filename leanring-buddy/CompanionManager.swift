@@ -91,6 +91,10 @@ final class CompanionManager: ObservableObject {
     let drawingLayerModel = DrawingLayerModel()
     /// Clickable paper / image / video card the buddy holds up next to itself.
     private let mediaCardPanelManager = MediaCardPanelManager()
+    /// Notes, links and images the user pinned in the notch; folded into every prompt.
+    let userContextStore = UserContextStore()
+    /// Snapshot of the pinned context taken when an interaction starts.
+    private var userContextForCurrentInteraction: UserContextBundle?
 
     private let chatClient: any ChatModelClient
     private let analysisClient: AnalysisServiceClient
@@ -576,6 +580,10 @@ final class CompanionManager: ObservableObject {
         let interactionStartedAt = Date()
         voiceState = .processing
         var report = SounderInteractionReport(transcript: transcript, modeUsed: "—")
+        userContextForCurrentInteraction = userContextStore.promptBundle()
+        if let bundle = userContextForCurrentInteraction {
+            print("📎 context in prompt: \(userContextStore.items.count) items, \(bundle.images.count) images")
+        }
 
         // Clear our own drawings a frame before capturing so nothing we drew can be read back.
         drawingLayerModel.clearImmediately()
@@ -656,7 +664,10 @@ final class CompanionManager: ObservableObject {
         report.modeUsed = "Media"
         report.analysisTask = "media"
         presentCaption("finding that…")
-        let screenContext = textLines.prefix(40).map(\.text).joined(separator: " · ")
+        var screenContext = textLines.prefix(40).map(\.text).joined(separator: " · ")
+        if let contextText = userContextForCurrentInteraction?.promptText {
+            screenContext = contextText + "\n\nscreen text: " + screenContext
+        }
         let lookupStartedAt = Date()
         let card = try await researchAgent.findMedia(query: request.query, preferredKind: request.preferredKind, screenContext: screenContext)
         report.analysisSeconds = Date().timeIntervalSince(lookupStartedAt)
@@ -701,7 +712,8 @@ final class CompanionManager: ObservableObject {
             try Task.checkCancellation()
             let decisionStartedAt = Date()
             let action = try await agentModePipeline.decideNextAction(
-                task: task, researchNotes: researchNotes?.asPromptText, stepNumber: stepNumber, history: history,
+                task: task, researchNotes: researchNotes?.asPromptText, userContextText: userContextForCurrentInteraction?.promptText,
+                stepNumber: stepNumber, history: history,
                 capture: screenAnalysis.capture, elements: screenAnalysis.elements
             )
             report.planSeconds += Date().timeIntervalSince(decisionStartedAt)
@@ -786,7 +798,7 @@ final class CompanionManager: ObservableObject {
                 try await speak("i see diagnoses but no medication list on this screen.")
                 return
             }
-            outcome = try await clinicalModePipeline.checkMedications(reading: reading, question: report.transcript, isScopedToCircle: regionOfInterest != nil)
+            outcome = try await clinicalModePipeline.checkMedications(reading: reading, question: report.transcript, isScopedToCircle: regionOfInterest != nil, userContextText: userContextForCurrentInteraction?.promptText)
         }
         report.analysisSeconds = Date().timeIntervalSince(analysisStartedAt)
         report.metricText = outcome.metricText
@@ -835,7 +847,8 @@ final class CompanionManager: ObservableObject {
             capture: capture,
             elements: elements,
             regionOfInterestInCapturePixels: regionOfInterest,
-            conversationHistory: conversationHistory
+            conversationHistory: conversationHistory,
+            userContext: userContextForCurrentInteraction
         )
         report.planSeconds = Date().timeIntervalSince(answerStartedAt)
         try Task.checkCancellation()

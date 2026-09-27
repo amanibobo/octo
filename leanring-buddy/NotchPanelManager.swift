@@ -113,6 +113,7 @@ final class NotchPanelManager {
             withTransaction(withoutAnimation) {
                 islandState.isCardContentVisible = false
                 islandState.isShowingSettings = false
+                islandState.isShowingContext = false
             }
             withAnimation(NotchIslandState.collapseAnimation) { islandState.isExpanded = false }
             withAnimation(.easeOut(duration: 0.14).delay(0.24)) { islandState.isCollapsedFaceVisible = true }
@@ -238,8 +239,8 @@ final class NotchPanelManager {
         } else {
             expandWorkItem?.cancel()
             expandWorkItem = nil
-            // The settings page stays open until the user clicks away or presses back.
-            if islandState.isExpanded, collapseWorkItem == nil, !islandState.isShowingSettings {
+            // The settings and context pages stay open until the user clicks away or presses back.
+            if islandState.isExpanded, collapseWorkItem == nil, !islandState.isShowingSettings, !islandState.isShowingContext {
                 let workItem = DispatchWorkItem { [weak self] in
                     guard let self else { return }
                     self.collapseWorkItem = nil

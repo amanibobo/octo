@@ -58,6 +58,7 @@ final class NotchIslandState: ObservableObject {
     @Published var isHovering = false
     @Published var isPressed = false
     @Published var isShowingSettings = false
+    @Published var isShowingContext = false
 
     /// Physical notch metrics, set once from the screen.
     var notchWidth: CGFloat = 200
@@ -142,9 +143,15 @@ struct NotchIslandView: View {
                 NotchSettingsView(companionManager: companionManager, onBack: {
                     withAnimation(NotchIslandState.expandAnimation) { state.isShowingSettings = false }
                 })
+            } else if state.isShowingContext {
+                NotchContextView(userContextStore: companionManager.userContextStore, onBack: {
+                    withAnimation(NotchIslandState.expandAnimation) { state.isShowingContext = false }
+                })
             } else if companionManager.hasCompletedOnboarding && companionManager.allPermissionsGranted {
-                NotchPanelContentView(companionManager: companionManager, onOpenSettings: {
+                NotchPanelContentView(companionManager: companionManager, userContextStore: companionManager.userContextStore, onOpenSettings: {
                     withAnimation(NotchIslandState.expandAnimation) { state.isShowingSettings = true }
+                }, onOpenContext: {
+                    withAnimation(NotchIslandState.expandAnimation) { state.isShowingContext = true }
                 })
             } else {
                 CompanionPanelView(companionManager: companionManager, isEmbeddedInNotch: true)

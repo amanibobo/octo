@@ -33,6 +33,8 @@ final class GeneralModePipeline {
     private static let systemPrompt = """
     you're octo, a friendly companion that lives in the user's menu bar. the user just spoke to you via push-to-talk and you can see their screen. your reply is spoken aloud, so write the way you'd talk: one or two short sentences, all lowercase, casual, no lists, no markdown, no emojis. spell out small numbers. never say "simply" or "just". if they ask for more detail, go deeper.
 
+    the first image is the screen. any further images are references the user pinned as context, not the screen; never point at things in them.
+
     the screenshot has numbered red tags. each tag is an element id from the list you are given. point (point_element_id + a 1-3 word point_label) only when the user is asking where something is, how to do something, or what to click, and the thing is on screen. for descriptive questions ("what do you see", "what is this") return null and do not point. you may also return a few highlight_element_ids to light up related text. only use ids from the list.
 
     if the user asks you to show, find, pull up or bring up a paper, study, article, image, picture, diagram, video or link about something, set media_query to a precise web search query for it and media_kind to paper, image, video or link; you will hold the result up next to you, so say something like "here's one" in speak. otherwise leave both null.
@@ -56,7 +58,8 @@ final class GeneralModePipeline {
         capture: SounderScreenCapture,
         elements: [ScreenElement],
         regionOfInterestInCapturePixels: CGRect? = nil,
-        conversationHistory: [ChatModelPriorTurn]
+        conversationHistory: [ChatModelPriorTurn],
+        userContext: UserContextBundle? = nil
     ) async throws -> Answer {
         // Spatial context: when the user circled a region while holding the hotkey,
         // the model sees only that crop and the elements inside it. IDs are kept so
@@ -93,8 +96,14 @@ final class GeneralModePipeline {
             "[\(element.id)] \(String(element.text.prefix(70)))"
         }.joined(separator: "\n")
 
+        // Pinned context rides along as background; its images follow the screenshot.
+        var contextNote = ""
+        if let userContext {
+            contextNote = userContext.promptText + "\n\n"
+            images.append(contentsOf: userContext.images)
+        }
         let userText = """
-        \(regionNote)elements on screen (id → text):
+        \(contextNote)\(regionNote)elements on screen (id → text):
         \(elementListText.isEmpty ? "(no text detected)" : elementListText)
 
         user said: "\(transcript)"

@@ -82,7 +82,7 @@ final class ClinicalModePipeline {
 
     // MARK: - Medication check
 
-    func checkMedications(reading: ClinicalScreenReading, question: String, isScopedToCircle: Bool) async throws -> Outcome {
+    func checkMedications(reading: ClinicalScreenReading, question: String, isScopedToCircle: Bool, userContextText: String? = nil) async throws -> Outcome {
         let payload = Self.buildCheckPayload(from: reading)
         let privacyReport = Self.privacyReport(for: payload, reading: reading)
         print("🔒 outbound /clinical/check: \(privacyReport)")
@@ -90,38 +90,18 @@ final class ClinicalModePipeline {
         let response = try await clinicalClient.check(payload: payload)
         let mentionsByID = Dictionary(uniqueKeysWithValues: reading.medications.map { ($0.id, $0) })
 
-        var primitives: [DrawingPrimitive] = []
+        // Findings are spoken, not drawn: the chart stays clean. The list is kept
+        // for the report and the narration prompt.
+        let primitives: [DrawingPrimitive] = []
         var footnotes: [String] = []
         for (index, finding) in response.findings.enumerated() {
-            let footnoteNumber = index + 1
-            // Red = major, yellow = warning (moderate), green = note (minor).
-            let severityColor: DrawingColor = finding.severity == "major" ? .red : (finding.severity == "moderate" ? .yellow : .green)
             let mentions = finding.medicationIds.compactMap { mentionsByID[$0] }
-
-            switch finding.type {
-            case "DDI":
-                guard mentions.count == 2 else { continue }
-                primitives.append(.link(id: "ddi-\(footnoteNumber)", fromRectInCapturePixels: mentions[0].drugBox,
-                                        toRectInCapturePixels: mentions[1].drugBox, color: severityColor,
-                                        label: "\(finding.severity) \(footnoteNumber)"))
-            default:
-                guard let mention = mentions.first else { continue }
-                primitives.append(.underline(id: "dose-\(footnoteNumber)", rectInCapturePixels: mention.doseBox ?? mention.drugBox, color: severityColor))
-                let shortText: String
-                switch finding.type {
-                case "RENAL": shortText = response.egfrUsed.map { "renal · eGFR \(Int($0.rounded()))" } ?? "renal"
-                case "AGE": shortText = "age"
-                default: shortText = "above label max"
-                }
-                primitives.append(.badge(id: "dose-badge-\(footnoteNumber)", anchorInCapturePixels: CGPoint(x: mention.rowBox.maxX - 4, y: mention.rowBox.midY),
-                                         text: "\(shortText) \(footnoteNumber)"))
-            }
             let drugNames = mentions.map(\.name).joined(separator: " + ")
-            footnotes.append("\(footnoteNumber). \(drugNames) (\(finding.severity)): \(finding.message) — \(finding.reference)")
+            footnotes.append("\(index + 1). \(drugNames) (\(finding.severity)): \(finding.message) — \(finding.reference)")
         }
 
         let metricText = "\(response.findings.count) findings · \(response.interactionsChecked) pairs checked · eGFR \(response.egfrUsed.map { String(format: "%.0f", $0) } ?? "n/a") (\(response.egfrSource ?? "none"))"
-        let spokenText = await narrate(question: question, reading: reading, findings: response, footnotes: footnotes, isScopedToCircle: isScopedToCircle)
+        let spokenText = await narrate(question: question, reading: reading, findings: response, footnotes: footnotes, isScopedToCircle: isScopedToCircle, userContextText: userContextText)
         return Outcome(primitives: primitives, spokenText: spokenText, metricText: metricText, footnotes: footnotes)
     }
 
@@ -140,20 +120,11 @@ final class ClinicalModePipeline {
 
         let response = try await clinicalClient.evidence(condition: conditionName, drug: drug)
 
-        var primitives: [DrawingPrimitive] = []
+        // Evidence is spoken and offered as a card; nothing is drawn on the chart.
+        let primitives: [DrawingPrimitive] = []
         var footnotes: [String] = []
         let trials = response.items.filter { $0.kind == "trial" }
         let sponsored = response.items.filter { $0.kind == "sponsored" }
-
-        if let box = targetCondition?.box {
-            if !trials.isEmpty {
-                primitives.append(.badge(id: "evidence-badge", anchorInCapturePixels: CGPoint(x: box.maxX + 2, y: box.midY), text: "new evidence · \(trials.count)"))
-            }
-            if !sponsored.isEmpty {
-                primitives.append(.badge(id: "sponsored-badge", anchorInCapturePixels: CGPoint(x: box.maxX + 2, y: box.midY + box.height * 1.4), text: "sponsored medical information"))
-            }
-            primitives.append(.underline(id: "evidence-underline", rectInCapturePixels: box, color: .yellow))
-        }
         for (index, item) in trials.enumerated() {
             footnotes.append("\(index + 1). \(item.title) — \(item.source) (\(item.id))")
         }
@@ -175,7 +146,7 @@ final class ClinicalModePipeline {
     /// the findings the rules service produced (numbered like the footnotes). It sees
     /// the same concept-level facts the service saw, never raw chart text. If the
     /// rewrite drops a number the findings contain, the deterministic summary is used.
-    private func narrate(question: String, reading: ClinicalScreenReading, findings: ClinicalCheckResponse, footnotes: [String], isScopedToCircle: Bool) async -> String {
+    private func narrate(question: String, reading: ClinicalScreenReading, findings: ClinicalCheckResponse, footnotes: [String], isScopedToCircle: Bool, userContextText: String?) async -> String {
         let medicationLines = reading.medications.map { mention -> String in
             var line = mention.name
             if let dose = mention.doseMilligrams { line += " \(dose.formatted()) mg" }
@@ -188,11 +159,12 @@ final class ClinicalModePipeline {
         }.joined(separator: "\n")
 
         let systemPrompt = """
-        you are octo, a clinical sidekick speaking to a clinician looking at a chart. answer their question directly and conversationally in at most 75 words, lowercase, no lists. the numbered findings below were computed by a rules engine and are drawn on the chart with matching footnote numbers; refer to them by number when relevant ("that's finding one"). you may add one sentence of general pharmacology context from your own knowledge, but say "generally" when you do, and never invent lab values, doses or interactions that are not in the findings. if the question is about something the findings do not cover, say what the findings do show and answer the rest from general knowledge briefly. if nothing was flagged, say so plainly.
+        you are octo, a clinical sidekick speaking to a clinician looking at a chart. answer their question directly and conversationally in at most 75 words, lowercase, no lists. the numbered findings below were computed by a rules engine; refer to them by drug name, not by number. you may add one sentence of general pharmacology context from your own knowledge, but say "generally" when you do, and never invent lab values, doses or interactions that are not in the findings. if the question is about something the findings do not cover, say what the findings do show and answer the rest from general knowledge briefly. if nothing was flagged, say so plainly.
         """
         let scopeNote = isScopedToCircle ? "the clinician circled part of the chart, so only those medications were checked.\n" : ""
+        let contextNote = userContextText.map { $0 + "\n\n" } ?? ""
         let userText = """
-        \(scopeNote)patient: \(reading.ageYears.map { "\($0) years" } ?? "age unknown") \(reading.sex ?? "")
+        \(contextNote)\(scopeNote)patient: \(reading.ageYears.map { "\($0) years" } ?? "age unknown") \(reading.sex ?? "")
         medications on screen: \(medicationLines.isEmpty ? "none" : medicationLines)
         labs: \(labLines.isEmpty ? "none" : labLines)
         conditions: \(reading.conditions.map(\.canonicalName).joined(separator: ", "))
@@ -210,7 +182,7 @@ final class ClinicalModePipeline {
             guard !trimmed.isEmpty else { return findings.summaryText }
             // Every number the findings mention must survive verbatim if it is spoken at all;
             // the model may leave numbers out but may not alter them.
-            let allowedNumbers = Self.numberTokens(in: findingLines + " " + labLines + " " + medicationLines + " \(reading.ageYears ?? 0)")
+            let allowedNumbers = Self.numberTokens(in: findingLines + " " + labLines + " " + medicationLines + " \(reading.ageYears ?? 0) " + (userContextText ?? ""))
             let spokenNumbers = Self.numberTokens(in: trimmed)
             guard spokenNumbers.isSubset(of: allowedNumbers) else {
                 print("⚠️ narration altered a number; using the rules summary")

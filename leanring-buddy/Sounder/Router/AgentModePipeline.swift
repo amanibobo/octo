@@ -86,6 +86,7 @@ final class AgentModePipeline {
     func decideNextAction(
         task: String,
         researchNotes: String?,
+        userContextText: String? = nil,
         stepNumber: Int,
         history: [String],
         capture: SounderScreenCapture,
@@ -99,9 +100,10 @@ final class AgentModePipeline {
         let elementListText = groundingElements.map { "[\($0.id)] \(String($0.text.prefix(60)))" }.joined(separator: "\n")
         let historyText = history.isEmpty ? "(none yet)" : history.joined(separator: "\n")
         let researchText = researchNotes.map { "research notes on how to do this:\n\($0)\n\n" } ?? ""
+        let contextText = userContextText.map { $0 + "\n\n" } ?? ""
         let userText = """
         task: "\(task)"
-        \(researchText)step \(stepNumber) of \(Self.maximumSteps). frontmost app: \(MacControl.frontmostApplicationName())
+        \(contextText)\(researchText)step \(stepNumber) of \(Self.maximumSteps). frontmost app: \(MacControl.frontmostApplicationName())
         actions taken so far:
         \(historyText)
 
