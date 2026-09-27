@@ -4,7 +4,7 @@ compatibility_date = "2024-01-01"
 
 [vars]
 # Claude is the main model for General-mode answers and planning. Needs ANTHROPIC_API_KEY.
-CLAUDE_MODEL = "claude-sonnet-5"
+CLAUDE_MODEL = "claude-opus-5-5"
 # Fireworks model used for planning, narration and Set-of-Mark vision grounding.
 # Must support image input + JSON-schema output. kimi-k3-fast measured ~1.3s per call.
 FIREWORKS_CHAT_MODEL = "accounts/fireworks/routers/kimi-k3-fast"

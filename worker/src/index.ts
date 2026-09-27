@@ -36,7 +36,7 @@ const FIREWORKS_CHAT_COMPLETIONS_URL = "https://api.fireworks.ai/inference/v1/ch
 const FIREWORKS_TRANSCRIPTION_URL = "https://audio-turbo.us-virginia-1.direct.fireworks.ai/v1/audio/transcriptions";
 const DEFAULT_FIREWORKS_CHAT_MODEL = "accounts/fireworks/routers/kimi-k3-fast";
 const ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages";
-const DEFAULT_CLAUDE_MODEL = "claude-sonnet-5";
+const DEFAULT_CLAUDE_MODEL = "claude-opus-5-5";
 const DEFAULT_FIREWORKS_TRANSCRIPTION_MODEL = "whisper-v3-turbo";
 
 export default {
