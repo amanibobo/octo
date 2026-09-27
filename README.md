@@ -1,14 +1,31 @@
-# Sounder
+# Sounder · Rx Sidekick
 
-**A screen buddy that reads your data off the pixels, trains a model in seconds, and draws the answer on your screen.**
+**A screen buddy for clinicians: it reads the chart on screen, catches drug interactions and dosing problems, surfaces new evidence, and speaks, without shipping patient text to any model.**
 
-Hold `Control + Option` over any spreadsheet and ask out loud. Sounder screenshots the display under your cursor, reads the table with on-device OCR, fits a model to it on a small Python service, and draws the answer *in place*: red circles around anomalous rows, importance bars docked under the real column headers, a fitted curve over your own chart. Then it tells you what it found. No copy-paste, no upload, no plugin.
+Hold `Control + Option` over an EHR chart, a med list, or a PubMed page and ask out loud. Sounder screenshots the display under your cursor, runs on-device OCR and on-device entity extraction (drugs, doses, frequencies, conditions, labs, age, sex), normalizes drugs to RxNorm concepts, and sends **only concept IDs and numbers** to a small service that checks interactions, label dosing and renal rules. The findings are drawn on the chart in place: a red link between interacting drugs, a coloured underline under an out-of-range dose, a "new evidence" badge next to a condition, numbered footnotes with the references. Then it explains in two sentences.
 
-Built at **HackGT 13** for the *Oracle of the Deep* track.
+Built at **HackGT 13** for the Impiricus challenge ("invent the next way we engage HCPs") and the *Oracle of the Deep* track. Data mode (spreadsheets: anomalies, drivers, curve fits) and General mode (ask anything, it points) are the other two modes of the same buddy.
 
-> **Disclosure.** Client shell forked from [Clicky](https://github.com/farzaa/clicky) (MIT) for window/capture/hotkey/TTS plumbing. Extraction (OCR grid reconstruction + ink-gap segmentation), analysis services, grounding-by-ID, drawing layer, mode router, voice tools, planner contract and synthetic-data pipeline are original work built during HackGT 13. Upstream `LICENSE` is kept; ours is `LICENSE-SOUNDER`.
+> **Disclosure.** Client shell forked from [Clicky](https://github.com/farzaa/clicky) (MIT) for window/capture/hotkey/TTS plumbing. Extraction (OCR grid reconstruction, ink-gap segmentation, clinical entity extraction), analysis and clinical services, grounding-by-ID, drawing layer, mode router, voice pipeline, privacy boundary and the synthetic-data pipeline are original work built during HackGT 13. Upstream `LICENSE` is kept; ours is `LICENSE-SOUNDER`.
 
-## What it does
+## Why this is a new HCP engagement channel
+
+- **In the workflow, at the moment of relevance.** Voice plus on-screen drawing inside the chart the clinician is already looking at. Not SMS, not a portal.
+- **Compliant by construction.** Raw screen text never leaves the laptop. The outbound payload is scanned before every request; the console prints `🔒 outbound: 6 drug concepts, 5 condition concepts, 6 numeric values, 0 raw words`.
+- **A disclosed content slot.** The evidence badge is where sponsored medical information (a label update, a trial readout) can appear in context, opt-in and labeled "Sponsored medical information". The demo ships one placeholder slot for HFpEF.
+- **Measurable.** Interactions caught, dosing flags raised, pairs checked, seconds from question to drawing.
+
+## Demo (synthetic patient in `demo/chart.html`, 90 seconds)
+
+| You say | On screen | Spoken |
+|---|---|---|
+| "anything wrong with this med list?" | red link warfarin ↔ fluconazole (major), orange link fluconazole ↔ atorvastatin, underline under the metformin dose, footnotes | "three things to flag. warfarin plus fluconazole is a major interaction: fluconazole inhibits CYP2C9 and raises warfarin exposure; INR climbs within days; monitor INR closely or choose an alternative antifungal. …" |
+| "what's new for HFpEF?" | badge next to HFpEF, references drawer with FINEARTS-HF, STEP-HFpEF, DELIVER, plus one labeled sponsored slot | "the newest trial for hfpef is FINEARTS-HF, NEJM 2024: finerenone reduced worsening heart failure events…" |
+| edit the med list (cells are editable), wait a second | the same check re-runs and redraws | "updated. …" |
+
+Open `demo/chart.html` in a browser at 100% zoom. The patient is 71, AF on warfarin, new fluconazole, metformin 1000 mg BID with eGFR 38, HFpEF.
+
+## Data mode (spreadsheets)
 
 | You say | What happens on screen | What it says |
 |---|---|---|
@@ -22,19 +39,18 @@ Edit a flagged cell and the same question re-runs automatically once the screen 
 ## Architecture
 
 ```
-[Mac app, Swift]                                            [Cloudflare Worker]      [Python service]
-hotkey ─► native capture ─► Vision OCR ─► ink-gap segmenter ─► TableExtractor       (holds FIREWORKS_API_KEY)
-              │                 │                                  │
-              │                 └─► elements[] {id, bbox, text}    ├─ confidence < 0.9 ─► ⌘A ⌘C clipboard TSV, aligned to OCR rows
-              │                                                    ▼
-              ├─► /transcribe (Fireworks whisper-v3-turbo) ◄── push-to-talk WAV
-              ├─► planner: /chat (Fireworks kimi-k3-fast, JSON schema) ── sees column names only ──► {task, target_col, k…}
-              │                                                                                        │
-              │                                                                    POST /analyze ◄─────┘
-              │                                                        IsolationForest · HistGradientBoosting + permutation importance · AIC curve fit
-              ▼                                                                                        │
-DrawingLayer (circle_rows · bars_under_headers · curve · highlight) ◄── row ids / importances / curve points ◄┘
-AVSpeechSynthesizer (or ElevenLabs via /tts) ◄── deterministic sentence from the numbers, optionally rephrased by the LLM
+[Mac app, Swift]                                                      [Cloudflare Worker]       [Modal]
+hotkey ─► native capture ─► Vision OCR ─► ink-gap segmenter ─┬─► ClinicalEntityExtractor      (FIREWORKS + ELEVENLABS keys)
+                                                             │   drugs→RXCUI, doses, freq,
+                                                             │   conditions→ICD-10, labs, age, sex
+                                                             │        │ concept IDs + numbers only (privacy scan)
+                                                             │        ▼
+                                                             │   POST /clinical/check ──────────────────────────► interactions (seed set), label max dose,
+                                                             │   POST /clinical/evidence ────────────────────────► renal rules (CKD-EPI 2021), age rules
+                                                             │                                                    PubMed live → seeded cache; sponsored slot
+                                                             ├─► TableExtractor ─► /analyze (anomaly · drivers · fit)
+                                                             └─► elements[] {id,bbox,text} ─► /chat (Fireworks kimi-k3-fast, Set-of-Mark) for General mode
+Apple on-device speech ─► keyword router ─► mode ─► DrawingLayer (link · underline · badge · footnotes · circle · bars · curve) ─► ElevenLabs flash
 ```
 
 **Coordinate contract.** Every box is in *capture pixels* (top-left origin of the captured display) until the drawing layer scales it to overlay points: `point = pixel × (displayPoints / capturePixels)`. The overlay window covers exactly the captured display, so no other transform exists. The panel's **Calibrate overlay** button outlines every text line it can read for 5 s: if the boxes sit on the text, the mapping is right.
@@ -117,21 +133,21 @@ Do **not** build from the terminal with `xcodebuild`: it invalidates the TCC per
 
 Panel toggles: **Clipboard fallback** (⌘A/⌘C when OCR < 90%), **On-device transcription** (Apple Speech, default on; off = Fireworks Whisper), **Show Sounder** (persistent vs. transient cursor).
 
-## Status vs. the PRD
+## Status vs. the PRDs
 
-| PRD item | Status |
+| Item | Status |
 |---|---|
-| Hotkey, native capture, overlay with verified coordinates | done (+ calibration self-test) |
-| Clipboard extraction path wired to analysis + drawing | done, gated on OCR confidence |
-| `anomaly`, `drivers` end to end | done, tested against synthetic Telco-shaped data |
-| `fit` over a detected chart | done for numeric axes; date/categorical axes not calibrated |
-| Speech-to-speech voice with typed tools | Apple on-device speech (or Fireworks Whisper) → keyword planner, Fireworks LLM only when needed → ElevenLabs flash (pipelined per sentence, fillers pre-synthesized). Grok Voice replaced per the team's keys |
-| General mode with Set-of-Mark grounding by ID | done (OCR text elements; no icon/button detector yet) |
-| Edit-and-re-run diffing | done (table region watcher, fires once the screen settles) |
-| Offline fallback | Apple Speech + keyword planner + local analysis service; General mode needs the network |
-| Trained screenshot extractor (RF-DETR) | synthetic data generator runs; `train.py` / `serve.py` are scaffolds, not yet trained (needs GPU) |
-| Modal deployment | deployed: `https://amanibobo1--sounder-analysis-serve.modal.run` (`min_containers=1`) |
-| Golden-path recording, Devpost, slide | not started |
+| Rx: OCR → entities → RxNorm → interactions + dosing + renal → drawn links/underlines/footnotes → spoken | done, verified on the rendered demo chart (6/6 drugs with RXCUI, 5 conditions, labs, age, sex; 3 findings) |
+| Rx: privacy boundary enforced in code | done: payload scanned, `0 raw words` logged per request |
+| Rx: evidence badge + citations + disclosed sponsored slot | done; PubMed live with seeded cache fallback (PubMed returned 500s during the build) |
+| Rx: edit-and-re-run | done (watches the med list region) |
+| Rx: trained NER (BiomedBERT fine-tune) | not trained: needs a GPU (Modal payment method). Extraction is dictionary (15k RxNorm names) + regex, the PRD's weak-supervision pass, behind the same `ClinicalScreenReading` type |
+| Rx: DDInter database | download host unreachable; 75 curated pairs with mechanisms ship instead (`services/clinical/data/interactions.json`) |
+| Data: anomaly / drivers / fit, clipboard fallback, re-run | done (see Data mode) |
+| General: Set-of-Mark grounding by ID | done |
+| Voice | Apple on-device speech → ElevenLabs flash, pipelined; Fireworks Whisper optional |
+| Modal | analysis + clinical service deployed with one warm container |
+| Worker deploy to Cloudflare, golden-path recording, Devpost, slide | not started |
 
 ## Repo layout
 
@@ -143,10 +159,12 @@ leanring-buddy/                 Swift app (Clicky fork)
   Sounder/Grounding/              Vision OCR, ink-gap segmenter, Set-of-Mark renderer
   Sounder/Extraction/             TableExtractor, ChartRegionDetector, ClipboardTableExtractor, ScreenChangeWatcher
   Sounder/Overlay/                DrawingPrimitives + DrawingLayerView
-  Sounder/Router/                 GeneralModePipeline, DataModePipeline
+  Sounder/Clinical/               ClinicalLexicon (+ drug_lexicon.json), ClinicalEntityExtractor, ClinicalServiceClient
+  Sounder/Router/                 GeneralModePipeline, DataModePipeline, ClinicalModePipeline
   Sounder/Voice/                  Fireworks Whisper provider, SpeechOutputClient
 worker/                         Cloudflare Worker proxy (/chat, /transcribe, /tts, /health, /analysis/*)
-services/                       Python: analysis service (tested), Modal wrapper, synth data generator, extractor scaffolds
+services/                       Python: analysis + clinical service (tested), Modal wrapper, seed data, synth data generator, extractor scaffolds
+demo/chart.html                 synthetic patient chart (editable med list) for the Rx demo
 ```
 
 See `CLAUDE.md` for the full architecture notes and coding conventions.

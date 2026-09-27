@@ -17,12 +17,27 @@ from .narration import summarize_anomalies, summarize_drivers, summarize_fit
 from .schemas import AnalyzeRequest, AnalyzeResponse
 from .table_frame import build_typed_frame, resolve_column_name
 
-app = FastAPI(title="Sounder analysis service", version="0.1.0")
+from clinical.evidence import find_evidence
+from clinical.rules import check_medications
+from clinical.schemas import ClinicalCheckRequest, ClinicalCheckResponse, EvidenceRequest, EvidenceResponse
+
+app = FastAPI(title="Sounder analysis + clinical service", version="0.2.0")
 
 
 @app.get("/health")
 def health() -> dict:
-    return {"ok": True, "service": "sounder-analysis", "tasks": ["anomaly", "drivers", "fit"]}
+    return {"ok": True, "service": "sounder-analysis", "tasks": ["anomaly", "drivers", "fit", "clinical/check", "clinical/evidence"]}
+
+
+@app.post("/clinical/check", response_model=ClinicalCheckResponse)
+def clinical_check(request: ClinicalCheckRequest) -> ClinicalCheckResponse:
+    """Interaction, dosing, renal and age checks. Input is concept IDs and numbers only."""
+    return check_medications(request)
+
+
+@app.post("/clinical/evidence", response_model=EvidenceResponse)
+def clinical_evidence(request: EvidenceRequest) -> EvidenceResponse:
+    return find_evidence(request.condition, request.drug)
 
 
 @app.post("/analyze", response_model=AnalyzeResponse)

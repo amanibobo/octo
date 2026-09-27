@@ -74,7 +74,7 @@ final class DataModePipeline {
     ]
 
     /// Fixed filler phrases so the speech client can synthesize them once at launch.
-    static let fillerPhrases = ["looking for outliers", "training a model", "fitting a curve", "let me look"]
+    static let fillerPhrases = ["looking for outliers", "training a model", "fitting a curve", "let me look"] + ClinicalModePipeline.fillerPhrases
 
     /// Keyword routing first (no network, ~0ms). The language model is only asked
     /// when keywords find nothing and the caller allows it (forced Data mode).

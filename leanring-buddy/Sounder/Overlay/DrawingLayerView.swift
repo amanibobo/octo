@@ -102,8 +102,8 @@ struct DrawingLayerView: View {
             Path { path in
                 path.addRoundedRect(in: rect, cornerSize: CGSize(width: 2, height: 2))
             }
-            .fill(isTopWeight ? DS.Colors.blue400 : DS.Colors.overlayCursorBlue.opacity(0.85))
-            .shadow(color: isTopWeight ? DS.Colors.blue400.opacity(0.9) : .clear, radius: isTopWeight ? 6 : 0)
+            .fill(isTopWeight ? DS.Colors.green400 : DS.Colors.overlayCursorBlue.opacity(0.85))
+            .shadow(color: isTopWeight ? DS.Colors.green400.opacity(0.9) : .clear, radius: isTopWeight ? 6 : 0)
 
         case .polyline(_, let pointsInCapturePixels, let clipRectInCapturePixels):
             let points = pointsInCapturePixels.map { geometry.overlayPoint(fromCapturePixel: $0) }
@@ -152,6 +152,64 @@ struct DrawingLayerView: View {
                 .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(Color.black.opacity(0.75)))
                 .fixedSize()
                 .position(x: anchor.x + 18, y: anchor.y)
+
+        case .link(_, let fromRectInCapturePixels, let toRectInCapturePixels, let color, let label):
+            let fromRect = geometry.overlayRect(fromCapturePixelRect: fromRectInCapturePixels)
+            let toRect = geometry.overlayRect(fromCapturePixelRect: toRectInCapturePixels)
+            let start = CGPoint(x: fromRect.minX - 6, y: fromRect.midY)
+            let end = CGPoint(x: toRect.minX - 6, y: toRect.midY)
+            let bulge = max(28, abs(end.y - start.y) * 0.35)
+            let control = CGPoint(x: min(start.x, end.x) - bulge, y: (start.y + end.y) / 2)
+            let apex = CGPoint(x: 0.25 * start.x + 0.5 * control.x + 0.25 * end.x, y: 0.25 * start.y + 0.5 * control.y + 0.25 * end.y)
+            Path { path in
+                path.move(to: start)
+                path.addQuadCurve(to: end, control: control)
+            }
+            .stroke(swiftUIColor(color), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+            .shadow(color: swiftUIColor(color).opacity(0.5), radius: 4)
+            Path { path in
+                path.addEllipse(in: CGRect(x: start.x - 4, y: start.y - 4, width: 8, height: 8))
+                path.addEllipse(in: CGRect(x: end.x - 4, y: end.y - 4, width: 8, height: 8))
+            }
+            .fill(swiftUIColor(color))
+            if let label {
+                Text(label)
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(swiftUIColor(color)))
+                    .fixedSize()
+                    .position(x: apex.x, y: apex.y)
+            }
+
+        case .underline(_, let rectInCapturePixels, let color):
+            let rect = geometry.overlayRect(fromCapturePixelRect: rectInCapturePixels)
+            Path { path in
+                path.addRoundedRect(in: CGRect(x: rect.minX - 2, y: rect.maxY + 1, width: rect.width + 4, height: 3), cornerSize: CGSize(width: 1.5, height: 1.5))
+            }
+            .fill(swiftUIColor(color))
+            .shadow(color: swiftUIColor(color).opacity(0.6), radius: 3)
+
+        case .footnoteDrawer(_, let lines):
+            VStack(alignment: .leading, spacing: 4) {
+                Text("References")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundColor(.white.opacity(0.7))
+                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                    Text(line)
+                        .font(.system(size: 11))
+                        .foregroundColor(.white)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: 460, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.black.opacity(0.82)))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.white.opacity(0.15), lineWidth: 0.8))
+            .frame(width: screenFrame.width, height: screenFrame.height, alignment: .bottomTrailing)
+            .padding(.trailing, 24)
+            .padding(.bottom, 36)
         }
     }
 

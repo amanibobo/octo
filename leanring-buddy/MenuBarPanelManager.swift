@@ -71,37 +71,33 @@ final class MenuBarPanelManager: NSObject {
         button.target = self
     }
 
-    /// Draws the clicky triangle as a menu bar icon. Uses the same shape
-    /// and rotation as the in-app cursor so the menu bar icon matches.
+    /// Draws a small octopus silhouette as the menu bar icon (template image,
+    /// so it follows the menu bar's light/dark appearance).
     private func makeClickyMenuBarIcon() -> NSImage {
         let iconSize: CGFloat = 18
         let image = NSImage(size: NSSize(width: iconSize, height: iconSize))
         image.lockFocus()
 
-        let triangleSize = iconSize * 0.7
-        let cx = iconSize * 0.50
-        let cy = iconSize * 0.50
-        let height = triangleSize * sqrt(3.0) / 2.0
-
-        let top = CGPoint(x: cx, y: cy + height / 1.5)
-        let bottomLeft = CGPoint(x: cx - triangleSize / 2, y: cy - height / 3)
-        let bottomRight = CGPoint(x: cx + triangleSize / 2, y: cy - height / 3)
-
-        let angle = 35.0 * .pi / 180.0
-        func rotate(_ point: CGPoint) -> CGPoint {
-            let dx = point.x - cx, dy = point.y - cy
-            let cosA = CGFloat(cos(angle)), sinA = CGFloat(sin(angle))
-            return CGPoint(x: cx + cosA * dx - sinA * dy, y: cy + sinA * dx + cosA * dy)
-        }
-
-        let path = NSBezierPath()
-        path.move(to: rotate(top))
-        path.line(to: rotate(bottomLeft))
-        path.line(to: rotate(bottomRight))
-        path.close()
-
         NSColor.black.setFill()
-        path.fill()
+        // Head
+        let headRadius = iconSize * 0.27
+        let headCenter = CGPoint(x: iconSize * 0.5, y: iconSize * 0.64)
+        NSBezierPath(ovalIn: CGRect(x: headCenter.x - headRadius, y: headCenter.y - headRadius,
+                                    width: headRadius * 2, height: headRadius * 2)).fill()
+        // Tentacles: five short strokes fanning downward (AppKit y grows upward)
+        for index in 0..<5 {
+            let spread = (CGFloat(index) - 2) / 2
+            let rootX = headCenter.x + spread * headRadius * 0.8
+            let tentacle = NSBezierPath()
+            tentacle.move(to: CGPoint(x: rootX, y: headCenter.y - headRadius * 0.6))
+            tentacle.curve(to: CGPoint(x: rootX + spread * iconSize * 0.18, y: iconSize * 0.08),
+                           controlPoint1: CGPoint(x: rootX, y: iconSize * 0.35),
+                           controlPoint2: CGPoint(x: rootX + spread * iconSize * 0.05, y: iconSize * 0.18))
+            tentacle.lineWidth = 2.0
+            tentacle.lineCapStyle = .round
+            NSColor.black.setStroke()
+            tentacle.stroke()
+        }
 
         image.unlockFocus()
         return image

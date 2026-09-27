@@ -76,6 +76,8 @@ final class CompanionManager: ObservableObject {
     private lazy var fallbackSpeechOutput: SystemSpeechOutputClient = SystemSpeechOutputClient()
     private let generalModePipeline: GeneralModePipeline
     private let dataModePipeline: DataModePipeline
+    private let clinicalModePipeline: ClinicalModePipeline
+    private let clinicalLexicon = ClinicalLexicon.load()
     private let screenChangeWatcher = ScreenChangeWatcher()
 
     var speechOutputDisplayName: String { speechOutput.displayName }
@@ -93,6 +95,7 @@ final class CompanionManager: ObservableObject {
         let elements: [ScreenElement]
         let table: ExtractedTable?
         let chart: ChartRegion?
+        let clinicalReading: ClinicalScreenReading
         let captureSeconds: Double
         let ocrSeconds: Double
     }
@@ -140,6 +143,7 @@ final class CompanionManager: ObservableObject {
 
         self.generalModePipeline = GeneralModePipeline(chatClient: chatClient)
         self.dataModePipeline = DataModePipeline(chatClient: chatClient, analysisClient: analysisClient)
+        self.clinicalModePipeline = ClinicalModePipeline(clinicalClient: ClinicalServiceClient(baseURL: SounderConfiguration.analysisServiceBaseURL))
 
         let offlineVoiceEnabled = UserDefaults.standard.object(forKey: "sounderOfflineVoiceEnabled") == nil
             ? true
@@ -556,10 +560,20 @@ final class CompanionManager: ObservableObject {
                 print("📈 Chart detected at \(chart.boundingBoxInCapturePixels.integral), x ticks \(chart.xTickValues), y ticks \(chart.yTickValues)")
             }
 
-            // 3. Route.
+            // 3. Route. Rx first: a chart with medications plus a clinical question.
+            let clinicalReading = screenAnalysis.clinicalReading
+            let clinicalIntent = ClinicalModePipeline.intent(for: transcript)
+            let shouldTryClinicalMode = selectedMode == .clinical
+                || (selectedMode == .automatic && clinicalIntent != .none && !clinicalReading.isEmpty)
+            if shouldTryClinicalMode {
+                try await runClinicalMode(intent: clinicalIntent, reading: clinicalReading, capture: capture, report: &report, isRerunAfterEdit: isRerunAfterEdit)
+                finishReport(&report, startedAt: interactionStartedAt)
+                return
+            }
+
             let shouldTryDataMode: Bool = {
                 switch selectedMode {
-                case .general: return false
+                case .general, .clinical: return false
                 case .data: return true
                 case .automatic:
                     guard let extractedTable else { return false }
@@ -691,6 +705,69 @@ final class CompanionManager: ObservableObject {
         }
     }
 
+    private func runClinicalMode(
+        intent: ClinicalIntent,
+        reading: ClinicalScreenReading,
+        capture: SounderScreenCapture,
+        report: inout SounderInteractionReport,
+        isRerunAfterEdit: Bool
+    ) async throws {
+        report.modeUsed = "Rx"
+        report.tableRowCount = reading.medications.count
+        report.tableColumnCount = reading.conditions.count
+        report.extractionSource = "ondevice-ner"
+
+        guard !reading.isEmpty else {
+            try await speak("i don't see medications or diagnoses on this screen. open a chart and ask again.")
+            return
+        }
+
+        let resolvedIntent: ClinicalIntent = intent == .none ? .checkMedications : intent
+        let outcome: ClinicalModePipeline.Outcome
+        let analysisStartedAt = Date()
+        switch resolvedIntent {
+        case .evidence(let conditionQuery):
+            report.analysisTask = "evidence"
+            if !isRerunAfterEdit { try? await speechOutput.speakText("pulling the latest evidence") }
+            outcome = try await clinicalModePipeline.evidence(reading: reading, conditionQuery: conditionQuery)
+        case .checkMedications, .none:
+            report.analysisTask = "check"
+            guard !reading.medications.isEmpty else {
+                try await speak("i see diagnoses but no medication list on this screen.")
+                return
+            }
+            if !isRerunAfterEdit { try? await speechOutput.speakText("checking the med list") }
+            outcome = try await clinicalModePipeline.checkMedications(reading: reading)
+        }
+        report.analysisSeconds = Date().timeIntervalSince(analysisStartedAt)
+        report.metricText = outcome.metricText
+        try Task.checkCancellation()
+
+        drawingLayerModel.show(outcome.primitives, geometry: capture.geometry, autoClearAfterSeconds: 90)
+        ClickyAnalytics.trackAIResponseReceived(response: outcome.spokenText)
+        try await speak(isRerunAfterEdit ? "updated. " + outcome.spokenText : outcome.spokenText)
+
+        // Edit-and-re-run over the medication list region.
+        let medicationBoxes = reading.medications.map(\.rowBox)
+        if let firstBox = medicationBoxes.first {
+            let region = medicationBoxes.dropFirst().reduce(firstBox) { $0.union($1) }.insetBy(dx: -20, dy: -40)
+            let rerunTranscript = report.transcript
+            screenChangeWatcher.start(regionInCapturePixels: region, geometry: capture.geometry) { [weak self] in
+                guard let self, self.currentResponseTask == nil else { return }
+                print("🔁 Chart changed — re-running the med check")
+                self.currentResponseTask = Task { [weak self] in
+                    guard let self else { return }
+                    await self.performInteraction(transcript: rerunTranscript, isRerunAfterEdit: true)
+                    if !Task.isCancelled {
+                        self.currentResponseTask = nil
+                        self.voiceState = .idle
+                        self.scheduleTransientHideIfNeeded()
+                    }
+                }
+            }
+        }
+    }
+
     private func runGeneralMode(
         transcript: String,
         capture: SounderScreenCapture,
@@ -790,8 +867,12 @@ final class CompanionManager: ObservableObject {
             let elements = ScreenElementDetector.makeElements(from: textLines)
             let table = TableExtractor.extractTable(from: textLines, imageSize: capture.pixelSize)
             let chart = ChartRegionDetector.detectChart(in: textLines, imageSize: capture.pixelSize, excluding: table?.tableBoundingBoxInCapturePixels)
+            let clinicalReading = ClinicalEntityExtractor.extract(from: textLines, lexicon: clinicalLexicon)
+            if !clinicalReading.isEmpty {
+                print("💊 Chart: \(clinicalReading.medications.count) meds \(clinicalReading.medications.map { "\($0.name) \($0.doseMilligrams.map { "\($0)mg" } ?? "")×\($0.dosesPerDay ?? 0)" }), \(clinicalReading.conditions.count) conditions \(clinicalReading.conditions.map(\.canonicalName)), labs \(clinicalReading.labs.map { "\($0.key)=\($0.value)" }), age \(clinicalReading.ageYears ?? -1) \(clinicalReading.sex ?? "")")
+            }
             return ScreenAnalysis(capture: capture, textLines: textLines, elements: elements, table: table, chart: chart,
-                                  captureSeconds: captureSeconds, ocrSeconds: ocrSeconds)
+                                  clinicalReading: clinicalReading, captureSeconds: captureSeconds, ocrSeconds: ocrSeconds)
         }
     }
 

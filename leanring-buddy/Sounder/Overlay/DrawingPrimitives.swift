@@ -30,11 +30,18 @@ nonisolated enum DrawingPrimitive: Identifiable, Sendable {
     case highlight(id: String, rectInCapturePixels: CGRect, color: DrawingColor)
     /// Small text label anchored at a point.
     case badge(id: String, anchorInCapturePixels: CGPoint, text: String)
+    /// Curved connector between two text boxes (drug–drug interaction) with a chip at the apex.
+    case link(id: String, fromRectInCapturePixels: CGRect, toRectInCapturePixels: CGRect, color: DrawingColor, label: String?)
+    /// Coloured underline beneath a text box (dose out of range, condition with evidence).
+    case underline(id: String, rectInCapturePixels: CGRect, color: DrawingColor)
+    /// Citation drawer pinned to the bottom-right of the screen.
+    case footnoteDrawer(id: String, lines: [String])
 
     var id: String {
         switch self {
         case .circle(let id, _, _, _), .bar(let id, _, _), .polyline(let id, _, _),
-             .band(let id, _, _, _), .highlight(let id, _, _), .badge(let id, _, _):
+             .band(let id, _, _, _), .highlight(let id, _, _), .badge(let id, _, _),
+             .link(let id, _, _, _, _), .underline(let id, _, _), .footnoteDrawer(let id, _):
             return id
         }
     }

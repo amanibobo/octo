@@ -110,7 +110,7 @@ struct CompanionPanelView: View {
     @ViewBuilder
     private var introCopySection: some View {
         if companionManager.hasCompletedOnboarding && companionManager.allPermissionsGranted {
-            Text("Hold Control+Option over a spreadsheet and ask: \"what's weird here?\", \"what drives churn?\", \"fit this\".")
+            Text("Hold Control+Option over a chart: \"anything wrong with this med list?\", \"what's new for HFpEF?\". Over a spreadsheet: \"what's weird here?\", \"what drives churn?\".")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(DS.Colors.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -633,7 +633,7 @@ struct CompanionPanelView: View {
         case .idle:
             return DS.Colors.success
         case .listening, .processing, .responding:
-            return DS.Colors.blue400
+            return DS.Colors.green400
         }
     }
 

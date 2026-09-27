@@ -14,6 +14,8 @@ image = (
     modal.Image.debian_slim(python_version="3.12")
     .pip_install("fastapi", "uvicorn", "pydantic>=2.7", "numpy", "pandas", "scikit-learn", "scipy")
     .add_local_python_source("analysis")
+    # The clinical package ships JSON data next to its code, so mount the whole folder.
+    .add_local_dir("clinical", remote_path="/root/clinical")
 )
 
 app = modal.App("sounder-analysis", image=image)

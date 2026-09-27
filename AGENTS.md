@@ -7,6 +7,7 @@
 
 macOS menu bar companion app (fork of Clicky, MIT). Lives entirely in the macOS status bar (no dock icon, no main window). Push-to-talk (ctrl+option) captures the display under the cursor at native resolution, runs **on-device Vision OCR**, rebuilds any spreadsheet table from the word boxes, and routes the spoken question:
 
+- **Rx mode** (primary demo, Impiricus): `ClinicalEntityExtractor` finds drugs (RxNorm lexicon `drug_lexicon.json`, 15k names), doses, frequencies, conditions (ICD-10 aliases), labs, age and sex on device; `ClinicalModePipeline` builds a concept-only payload, asserts no raw OCR words leak (`privacyReport`), calls `/clinical/check` (interactions seed set, label max dose, CKD-EPI 2021 renal rules, age rules) or `/clinical/evidence` (PubMed live → seeded cache, plus the disclosed sponsored slot) and draws `link` / `underline` / `badge` / `footnoteDrawer` primitives.
 - **Data mode**: a JSON-schema planner (Fireworks LLM, sees column names only) picks `anomaly` / `drivers` / `fit`; the Python analysis service (`services/analysis`) trains/fits a model and returns row ids, importances or curve points; the overlay draws circles around rows, importance bars under headers, or a curve over the user's chart; the result is spoken from the numbers.
 - **General mode**: Set-of-Mark screenshot + element list → Fireworks vision model returns an element **ID** to point at (never coordinates); the blue cursor flies there.
 
@@ -92,6 +93,10 @@ Worker vars: `FIREWORKS_CHAT_MODEL`, `FIREWORKS_TRANSCRIPTION_MODEL`, `ELEVENLAB
 | `Sounder/Extraction/ScreenChangeWatcher.swift` | ~120 | Region thumbnail diffing; fires once after a change settles. |
 | `Sounder/Overlay/DrawingPrimitives.swift` | ~150 | `DrawingPrimitive` enum + `DrawingOpsBuilder` (`circleRows`, `barsUnderHeaders`, `curve`, `highlightCells`, `highlightElements`, `calibrationOutlines`). |
 | `Sounder/Overlay/DrawingLayerView.swift` | ~200 | `DrawingLayerModel` (show/clear/auto-clear) + SwiftUI renderer, capture px → overlay points. |
+| `Sounder/Clinical/ClinicalLexicon.swift` | ~130 | Drug name → RXCUI table (bundle JSON + built-in fallback), condition aliases → ICD-10, lab keys. |
+| `Sounder/Clinical/ClinicalEntityExtractor.swift` | ~260 | OCR rows → `ClinicalScreenReading` (medications with dose/frequency boxes, conditions, labs, age, sex). |
+| `Sounder/Clinical/ClinicalServiceClient.swift` | ~100 | `/clinical/check`, `/clinical/evidence`. |
+| `Sounder/Router/ClinicalModePipeline.swift` | ~230 | Intent keywords, concept payload + privacy assertion, findings → drawing primitives + footnotes, evidence badges. |
 | `Sounder/Router/GeneralModePipeline.swift` | ~110 | Set-of-Mark vision answer `{speak, point_element_id, point_label, highlight_element_ids}`. |
 | `Sounder/Router/DataModePipeline.swift` | ~260 | Planner (LLM JSON + keyword fallback), analysis call, drawing primitives, templated speech + verified LLM rephrase. |
 | `Sounder/Voice/FireworksAudioTranscriptionProvider.swift` | ~210 | Upload-based `BuddyTranscriptionProvider` for Fireworks Whisper via Worker `/transcribe`. |
@@ -113,7 +118,9 @@ Worker vars: `FIREWORKS_CHAT_MODEL`, `FIREWORKS_TRANSCRIPTION_MODEL`, `ELEVENLAB
 | `AppBundleConfiguration.swift` | ~28 | Info.plist reader. |
 | `worker/src/index.ts` | ~260 | Cloudflare Worker proxy (routes above). |
 | `services/analysis/*.py` | ~600 | FastAPI analysis service (`app.py`, `schemas.py`, `table_frame.py`, `anomaly.py`, `drivers.py`, `curve_fit.py`, `narration.py`). Tests in `services/tests`. |
-| `services/modal_app.py` | ~30 | Modal deployment of the analysis service. |
+| `services/clinical/*.py` + `data/*.json` | ~450 | Clinical rules (`rules.py`), evidence (`evidence.py`), schemas, lexicon builder, seed data (75 interaction pairs, dosing/renal rules, evidence cache, sponsored slot). Tests in `services/tests/test_clinical.py`. |
+| `services/modal_app.py` | ~30 | Modal deployment of the analysis + clinical service. |
+| `demo/chart.html` | ~110 | Synthetic patient chart with editable med list for the Rx demo. |
 | `services/synth/generate_synthetic_tables.py` | ~170 | Playwright synthetic spreadsheet renderer → COCO boxes (extractor training data). |
 | `services/extractor/train.py`, `serve.py` | ~250 | RF-DETR fine-tune and `/extract` service scaffolds (untested, need GPU/weights). |
 
@@ -199,6 +206,7 @@ IMPORTANT: Follow these naming rules strictly. Clarity is the top priority.
 - Do not rename the project directory or scheme (the "leanring" typo is intentional/legacy)
 - Do not run `xcodebuild` from the terminal — it invalidates TCC permissions
 - Do not let the LLM emit pixel coordinates or invent numbers: grounding is by element ID, spoken statistics come from the analysis service
+- Do not put OCR text, patient identifiers or free text into `/clinical/*` payloads; `ClinicalModePipeline.privacyReport` asserts on it
 - Do not commit `worker/.dev.vars` or any API key
 
 ## Git Workflow

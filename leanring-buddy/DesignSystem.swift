@@ -93,19 +93,19 @@ enum DS {
 
         /// Accent fill — used for solid button backgrounds.
         /// #2563eb → ~5.1:1 contrast with white text (WCAG AA).
-        static let accent = blue600
+        static let accent = green600
 
         /// Accent hover — slightly darker blue for hover state.
         /// #1d4ed8 → ~6.5:1 contrast with white text (WCAG AA+).
-        static let accentHover = blue700
+        static let accentHover = green700
 
         /// Accent text — bright blue used for accent-colored text and icons
         /// on dark backgrounds (links, active nav items, highlighted labels).
-        static let accentText = blue400
+        static let accentText = green400
 
         /// Very subtle accent tint — used for selected item backgrounds (e.g. current step
         /// in the sidebar). Low opacity so it doesn't overpower.
-        static let accentSubtle = blue500.opacity(0.10)
+        static let accentSubtle = green500.opacity(0.10)
 
         // ── Semantic Colors ──────────────────────────────────────────
 
@@ -141,7 +141,14 @@ enum DS {
         /// The blue cursor/bubble color used in OverlayWindow.
         /// Kept distinct from the accent since it serves a different purpose
         /// (screen overlay vs in-app UI).
-        static let overlayCursorBlue = Color(hex: "#3380FF")
+        static let overlayCursorBlue = Color(hex: "#22C55E")
+
+        // Green scale (Tailwind Green) — the Sounder brand colour
+        static let green300 = Color(hex: "#86efac")
+        static let green400 = Color(hex: "#4ade80")
+        static let green500 = Color(hex: "#22c55e")
+        static let green600 = Color(hex: "#16a34a")
+        static let green700 = Color(hex: "#15803d")
 
         // ── Floating Button Gradient ─────────────────────────────────
 

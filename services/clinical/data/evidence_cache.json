@@ -1,0 +1,29 @@
+{
+  "source": "Seeded from landmark trial readouts so the demo works without network; live PubMed results replace these when reachable.",
+  "conditions": {
+    "hfpef": [
+      {"kind": "trial", "title": "FINEARTS-HF: finerenone in heart failure with mildly reduced or preserved ejection fraction", "source": "NEJM 2024", "id": "NCT04435626", "url": "https://clinicaltrials.gov/study/NCT04435626", "summary": "finerenone reduced worsening heart failure events and cardiovascular death in HFpEF and HFmrEF"},
+      {"kind": "trial", "title": "STEP-HFpEF: semaglutide in obesity-related HFpEF", "source": "NEJM 2023", "id": "NCT04788511", "url": "https://clinicaltrials.gov/study/NCT04788511", "summary": "semaglutide improved symptoms, physical limitation and weight loss in HFpEF with obesity"},
+      {"kind": "trial", "title": "DELIVER: dapagliflozin in heart failure with mildly reduced or preserved ejection fraction", "source": "NEJM 2022", "id": "NCT03619213", "url": "https://clinicaltrials.gov/study/NCT03619213", "summary": "dapagliflozin reduced worsening heart failure or cardiovascular death"}
+    ],
+    "atrial fibrillation": [
+      {"kind": "trial", "title": "ARTESIA: apixaban for subclinical atrial fibrillation", "source": "NEJM 2023", "id": "NCT01938248", "url": "https://clinicaltrials.gov/study/NCT01938248", "summary": "apixaban lowered stroke risk but raised major bleeding versus aspirin in device-detected atrial fibrillation"},
+      {"kind": "trial", "title": "NOAH-AFNET 6: edoxaban in atrial high-rate episodes", "source": "NEJM 2023", "id": "NCT02618577", "url": "https://clinicaltrials.gov/study/NCT02618577", "summary": "anticoagulation did not reduce stroke and increased bleeding in device-detected atrial high-rate episodes"},
+      {"kind": "trial", "title": "OPTION: left atrial appendage closure after ablation versus oral anticoagulation", "source": "NEJM 2024", "id": "NCT03795298", "url": "https://clinicaltrials.gov/study/NCT03795298", "summary": "appendage closure was noninferior for stroke and had less bleeding than continued anticoagulation"}
+    ],
+    "type 2 diabetes": [
+      {"kind": "trial", "title": "FLOW: semaglutide and kidney outcomes in type 2 diabetes with CKD", "source": "NEJM 2024", "id": "NCT03819153", "url": "https://clinicaltrials.gov/study/NCT03819153", "summary": "semaglutide reduced major kidney events and cardiovascular death in type 2 diabetes with chronic kidney disease"},
+      {"kind": "trial", "title": "SURMOUNT-OSA and SURPASS program: tirzepatide outcomes", "source": "NEJM 2024", "id": "NCT05412004", "url": "https://clinicaltrials.gov/study/NCT05412004", "summary": "tirzepatide produced large weight reductions with improved glycemic control"}
+    ],
+    "chronic kidney disease": [
+      {"kind": "trial", "title": "EMPA-KIDNEY: empagliflozin in chronic kidney disease", "source": "NEJM 2023", "id": "NCT03594110", "url": "https://clinicaltrials.gov/study/NCT03594110", "summary": "empagliflozin reduced kidney disease progression or cardiovascular death across a broad CKD population"},
+      {"kind": "trial", "title": "FLOW: semaglutide and kidney outcomes in type 2 diabetes with CKD", "source": "NEJM 2024", "id": "NCT03819153", "url": "https://clinicaltrials.gov/study/NCT03819153", "summary": "semaglutide reduced major kidney events in diabetic kidney disease"}
+    ],
+    "hypertension": [
+      {"kind": "trial", "title": "ESPRIT: intensive blood pressure control in high-risk patients", "source": "Lancet 2024", "id": "NCT04030234", "url": "https://clinicaltrials.gov/study/NCT04030234", "summary": "targeting systolic pressure under 120 reduced major cardiovascular events including in diabetes and prior stroke"}
+    ]
+  },
+  "sponsored_slots": [
+    {"condition": "hfpef", "sponsor": "Example Pharma (demo placeholder)", "title": "Label update: finerenone indication expanded to heart failure with LVEF of 40 percent or more", "text": "Sponsored medical information. Based on the FINEARTS-HF readout. Demo placeholder showing how a disclosed, opt-in content slot appears in the workflow.", "disclosure": true}
+  ]
+}
