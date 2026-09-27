@@ -96,6 +96,8 @@ final class CompanionManager: ObservableObject {
     private let generalModePipeline: GeneralModePipeline
     private let dataModePipeline: DataModePipeline
     private let clinicalModePipeline: ClinicalModePipeline
+    private let agentModePipeline: AgentModePipeline
+    private let researchAgent: ResearchAgent
     private let clinicalLexicon = ClinicalLexicon.load()
     private let screenChangeWatcher = ScreenChangeWatcher()
 
@@ -168,6 +170,8 @@ final class CompanionManager: ObservableObject {
         self.generalModePipeline = GeneralModePipeline(chatClient: chatClient)
         self.dataModePipeline = DataModePipeline(chatClient: chatClient, analysisClient: analysisClient)
         self.clinicalModePipeline = ClinicalModePipeline(clinicalClient: ClinicalServiceClient(baseURL: SounderConfiguration.analysisServiceBaseURL))
+        self.agentModePipeline = AgentModePipeline(chatClient: chatClient)
+        self.researchAgent = ResearchAgent(workerBaseURL: workerBaseURL)
 
         let offlineVoiceEnabled = UserDefaults.standard.object(forKey: "sounderOfflineVoiceEnabled") == nil
             ? true
@@ -601,7 +605,7 @@ final class CompanionManager: ObservableObject {
 
             let shouldTryDataMode: Bool = {
                 switch selectedMode {
-                case .general, .clinical: return false
+                case .general, .clinical, .agent: return false
                 case .data: return true
                 case .automatic:
                     guard let extractedTable else { return false }
@@ -732,6 +736,93 @@ final class CompanionManager: ObservableObject {
                 }
             }
         }
+    }
+
+    private func runAgentMode(
+        task: String,
+        firstScreenAnalysis: ScreenAnalysis,
+        report: inout SounderInteractionReport
+    ) async throws {
+        report.modeUsed = "Agent"
+        presentCaption("on it…")
+        try? await speechOutput.speakText(AgentModePipeline.fillerPhrase)
+
+        // Unfamiliar app → quick web research first, shown in the drawer beside the buddy.
+        var researchNotes: ResearchNotes?
+        if ResearchAgent.needsResearch(for: task) {
+            presentCaption("researching how to do that…")
+            drawingLayerModel.show([.footnoteDrawer(id: "research", lines: ["researching: \(task)", "searching the web for the steps…"])],
+                                   geometry: firstScreenAnalysis.capture.geometry, autoClearAfterSeconds: 120)
+            let researchStartedAt = Date()
+            researchNotes = try? await researchAgent.research(task: task)
+            report.planSeconds += Date().timeIntervalSince(researchStartedAt)
+            if let notes = researchNotes, !notes.steps.isEmpty {
+                var lines = ["plan for: \(task)"] + notes.steps.enumerated().map { "\($0.offset + 1). \($0.element)" }
+                if !notes.sourceTitles.isEmpty { lines.append("sources: " + notes.sourceTitles.joined(separator: " · ")) }
+                drawingLayerModel.show([.footnoteDrawer(id: "research", lines: lines)], geometry: firstScreenAnalysis.capture.geometry, autoClearAfterSeconds: 120)
+                presentCaption("got a plan, \(notes.steps.count) steps…")
+            } else {
+                drawingLayerModel.clearImmediately()
+            }
+        }
+        try Task.checkCancellation()
+
+        var screenAnalysis = firstScreenAnalysis
+        var history: [String] = []
+        var completionSummary = "i ran out of steps before finishing that."
+        for stepNumber in 1...AgentModePipeline.maximumSteps {
+            try Task.checkCancellation()
+            let decisionStartedAt = Date()
+            let action = try await agentModePipeline.decideNextAction(
+                task: task, researchNotes: researchNotes?.asPromptText, stepNumber: stepNumber, history: history,
+                capture: screenAnalysis.capture, elements: screenAnalysis.elements
+            )
+            report.planSeconds += Date().timeIntervalSince(decisionStartedAt)
+            try Task.checkCancellation()
+            print("🤖 step \(stepNumber): \(action.kind.rawValue) \(action.elementID.map { "[\($0)]" } ?? "") \(action.text ?? action.app ?? action.keys ?? "") — \(action.narration)")
+
+            if action.kind == .done || action.isTaskComplete {
+                completionSummary = action.completionSummary ?? action.narration
+                history.append("done: \(completionSummary)")
+                break
+            }
+
+            // Show what is about to happen: caption + buddy flies to the target + highlight.
+            presentCaption(action.narration + "…")
+            let stepPrimitives: [DrawingPrimitive]
+            if let elementID = action.elementID, let element = screenAnalysis.elements.first(where: { $0.id == elementID }) {
+                voiceState = .idle
+                detectedElementBubbleText = action.narration
+                detectedElementDisplayFrame = screenAnalysis.capture.geometry.displayFrame
+                detectedElementScreenLocation = screenAnalysis.capture.geometry.globalAppKitPoint(fromCapturePixel: element.centerInCapturePixels)
+                stepPrimitives = DrawingOpsBuilder.highlightElements([element])
+                // Let the flight land before the click so the trail matches the action.
+                try? await Task.sleep(nanoseconds: 900_000_000)
+                clearDetectedElementLocation()
+            } else {
+                stepPrimitives = []
+            }
+            let stepLog = history.suffix(4).map { String($0.prefix(60)) } + ["→ \(action.narration)"]
+            drawingLayerModel.show(stepPrimitives + [.footnoteDrawer(id: "agent-log", lines: ["agent · step \(stepNumber)"] + stepLog)],
+                                   geometry: screenAnalysis.capture.geometry, autoClearAfterSeconds: 30)
+
+            let historyEntry = await agentModePipeline.execute(action, elements: screenAnalysis.elements, geometry: screenAnalysis.capture.geometry)
+            history.append("\(stepNumber). \(historyEntry)")
+            report.analysisTask = "agent · \(stepNumber) steps"
+
+            try? await Task.sleep(nanoseconds: AgentModePipeline.settleDelayNanoseconds(after: action))
+            try Task.checkCancellation()
+            // Our own drawings are excluded from capture, but clear anyway so the log
+            // drawer never overlaps an element the next screenshot needs.
+            drawingLayerModel.clearImmediately()
+            try? await Task.sleep(nanoseconds: 40_000_000)
+            screenAnalysis = try await makeScreenAnalysisTask().value
+        }
+
+        report.metricText = "\(history.count) actions\(researchNotes == nil ? "" : " · researched")"
+        print("🤖 history:\n  " + history.joined(separator: "\n  "))
+        drawingLayerModel.clear()
+        try await speak(completionSummary)
     }
 
     private func runClinicalMode(

@@ -14,6 +14,7 @@ enum SounderMode: String, CaseIterable, Identifiable {
     case general
     case data
     case clinical
+    case agent
 
     var id: String { rawValue }
 
@@ -23,15 +24,17 @@ enum SounderMode: String, CaseIterable, Identifiable {
         case .general: return "General"
         case .data: return "Data"
         case .clinical: return "Rx"
+        case .agent: return "Agent"
         }
     }
 
     var explanation: String {
         switch self {
-        case .automatic: return "Rx when a chart with medications is on screen, Data for tables, otherwise General."
+        case .automatic: return "Agent for tasks (\"open…\", \"play…\"), Rx for charts, Data for tables, otherwise General."
         case .general: return "See the screen, answer by voice, point at things."
         case .data: return "Read the table, train a model, draw the answer on screen."
         case .clinical: return "Read the chart, check interactions and dosing, surface evidence. Only concept IDs leave the Mac."
+        case .agent: return "Do the task on this Mac: open apps, click, type. The buddy shows each step as it goes."
         }
     }
 }
