@@ -1,6 +1,6 @@
 <img src="docs/brand/octo-sprite.svg" width="56" align="left" alt="Octo" style="margin-right:12px">
 
-# Octo · Rx Sidekick
+# Octo
 
 <br clear="left">
 
