@@ -7,6 +7,7 @@
 //  screenshot plus the numbered element list and returns an ID, never pixels.
 //
 
+import CoreGraphics
 import Foundation
 
 @MainActor
@@ -19,10 +20,10 @@ final class GeneralModePipeline {
         let highlightedElements: [ScreenElement]
     }
 
-    private let chatClient: FireworksChatClient
+    private let chatClient: any ChatModelClient
     private static let maximumElementsSentToModel = 100
 
-    init(chatClient: FireworksChatClient) {
+    init(chatClient: any ChatModelClient) {
         self.chatClient = chatClient
     }
 
@@ -49,15 +50,38 @@ final class GeneralModePipeline {
         transcript: String,
         capture: SounderScreenCapture,
         elements: [ScreenElement],
-        conversationHistory: [FireworksChatClient.PriorTurn]
+        regionOfInterestInCapturePixels: CGRect? = nil,
+        conversationHistory: [ChatModelPriorTurn]
     ) async throws -> Answer {
-        var images: [FireworksChatClient.ChatImage] = []
+        // Spatial context: when the user circled a region while holding the hotkey,
+        // the model sees only that crop and the elements inside it. IDs are kept so
+        // the pointed element still resolves against the full-screen list.
+        var groundingImage = capture.cgImage
+        var groundingElements = Array(elements.prefix(Self.maximumElementsSentToModel))
+        var regionNote = ""
+        if let region = regionOfInterestInCapturePixels {
+            let fullBounds = CGRect(x: 0, y: 0, width: capture.cgImage.width, height: capture.cgImage.height)
+            let paddedRegion = region.insetBy(dx: -region.width * 0.12, dy: -region.height * 0.12).intersection(fullBounds).integral
+            if paddedRegion.width >= 40, paddedRegion.height >= 40, let cropped = capture.cgImage.cropping(to: paddedRegion) {
+                groundingImage = cropped
+                groundingElements = elements
+                    .filter { $0.boundingBoxInCapturePixels.intersects(paddedRegion) }
+                    .prefix(Self.maximumElementsSentToModel)
+                    .map { element in
+                        ScreenElement(id: element.id, kind: element.kind, text: element.text,
+                                      boundingBoxInCapturePixels: element.boundingBoxInCapturePixels.offsetBy(dx: -paddedRegion.minX, dy: -paddedRegion.minY),
+                                      confidence: element.confidence)
+                    }
+                regionNote = "the user circled part of the screen with the cursor while asking; the image is only that region. \"this\" or \"here\" means what is inside it.\n"
+            }
+        }
+
+        var images: [ChatModelImage] = []
         // 1280px is enough to read tags and costs half the upload/vision time of 1568px.
-        let groundingElements = Array(elements.prefix(Self.maximumElementsSentToModel))
-        if let markedScreenshot = SetOfMarkRenderer.renderMarkedScreenshot(capture: capture.cgImage, elements: groundingElements, maximumWidth: 1280) {
-            images.append(FireworksChatClient.ChatImage(data: markedScreenshot.data, mimeType: "image/jpeg"))
-        } else if let plainScreenshot = NativeScreenCaptureUtility.makeDownscaledJPEG(from: capture.cgImage) {
-            images.append(FireworksChatClient.ChatImage(data: plainScreenshot.data, mimeType: "image/jpeg"))
+        if let markedScreenshot = SetOfMarkRenderer.renderMarkedScreenshot(capture: groundingImage, elements: groundingElements, maximumWidth: 1280) {
+            images.append(ChatModelImage(data: markedScreenshot.data, mimeType: "image/jpeg"))
+        } else if let plainScreenshot = NativeScreenCaptureUtility.makeDownscaledJPEG(from: groundingImage) {
+            images.append(ChatModelImage(data: plainScreenshot.data, mimeType: "image/jpeg"))
         }
 
         let elementListText = groundingElements.map { element in
@@ -65,7 +89,7 @@ final class GeneralModePipeline {
         }.joined(separator: "\n")
 
         let userText = """
-        elements on screen (id → text):
+        \(regionNote)elements on screen (id → text):
         \(elementListText.isEmpty ? "(no text detected)" : elementListText)
 
         user said: "\(transcript)"

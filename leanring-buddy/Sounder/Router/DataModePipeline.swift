@@ -36,10 +36,10 @@ final class DataModePipeline {
         let spokenText: String
     }
 
-    private let chatClient: FireworksChatClient
+    private let chatClient: any ChatModelClient
     private let analysisClient: AnalysisServiceClient
 
-    init(chatClient: FireworksChatClient, analysisClient: AnalysisServiceClient) {
+    init(chatClient: any ChatModelClient, analysisClient: AnalysisServiceClient) {
         self.chatClient = chatClient
         self.analysisClient = analysisClient
     }

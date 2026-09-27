@@ -226,6 +226,7 @@ struct DrawingLayerView: View {
         case .blue: return DS.Colors.overlayCursorBlue
         case .yellow: return Color(red: 1.0, green: 0.85, blue: 0.2)
         case .orange: return .orange
+        case .green: return DS.Colors.overlayCursorBlue
         }
     }
 }

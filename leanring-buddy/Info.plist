@@ -14,8 +14,10 @@
 	<string>http://127.0.0.1:8787</string>
 	<key>SounderAnalysisBaseURL</key>
 	<string>https://amanibobo1--sounder-analysis-serve.modal.run</string>
+	<key>SounderChatProvider</key>
+	<string>claude</string>
 	<key>SounderChatModel</key>
-	<string>accounts/fireworks/routers/kimi-k3-fast</string>
+	<string>claude-sonnet-5</string>
 	<key>SounderSpeechOutputProvider</key>
 	<string>elevenlabs</string>
 	<key>SounderTTSBaseURL</key>

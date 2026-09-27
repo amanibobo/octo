@@ -63,6 +63,19 @@ final class ClinicalModePipeline {
         return nil
     }
 
+    // MARK: - Spatial context
+
+    /// Keeps only the medications and conditions inside the circled region. Labs,
+    /// age and sex stay (they are context, not targets). Falls back to the whole
+    /// reading when nothing clinical lies inside the region.
+    static func scoped(_ reading: ClinicalScreenReading, to regionOfInterest: CGRect?) -> ClinicalScreenReading {
+        guard let region = regionOfInterest else { return reading }
+        let medications = reading.medications.filter { $0.rowBox.intersects(region) || $0.drugBox.intersects(region) }
+        let conditions = reading.conditions.filter { $0.box.intersects(region) }
+        guard !medications.isEmpty || !conditions.isEmpty else { return reading }
+        return ClinicalScreenReading(medications: medications, conditions: conditions, labs: reading.labs, ageYears: reading.ageYears, sex: reading.sex)
+    }
+
     // MARK: - Medication check
 
     func checkMedications(reading: ClinicalScreenReading) async throws -> Outcome {
@@ -111,7 +124,7 @@ final class ClinicalModePipeline {
 
     // MARK: - Evidence
 
-    func evidence(reading: ClinicalScreenReading, conditionQuery: String?) async throws -> Outcome {
+    func evidence(reading: ClinicalScreenReading, conditionQuery: String?, drug: String? = nil) async throws -> Outcome {
         let targetCondition: ConditionMention? = {
             if let conditionQuery, let match = reading.conditions.first(where: { $0.canonicalName == conditionQuery }) { return match }
             return reading.conditions.first
@@ -120,9 +133,9 @@ final class ClinicalModePipeline {
         guard let conditionName else {
             throw AnalysisServiceError(message: "no condition to look up")
         }
-        print("🔒 outbound /clinical/evidence: condition=\(conditionName) (concept name only)")
+        print("🔒 outbound /clinical/evidence: condition=\(conditionName)\(drug.map { " drug=\($0)" } ?? "") (concept names only)")
 
-        let response = try await clinicalClient.evidence(condition: conditionName, drug: nil)
+        let response = try await clinicalClient.evidence(condition: conditionName, drug: drug)
 
         var primitives: [DrawingPrimitive] = []
         var footnotes: [String] = []

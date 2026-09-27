@@ -21,8 +21,13 @@ enum SounderConfiguration {
         AppBundleConfiguration.stringValue(forKey: "SounderAnalysisBaseURL") ?? "http://127.0.0.1:8000"
     }
 
-    /// Fireworks model for planning, narration and vision grounding. Nil lets the
-    /// Worker fill in its configured default so the model can change without a rebuild.
+    /// "claude" (default, via Worker /claude) or "fireworks" (via Worker /chat).
+    static var chatProvider: String {
+        AppBundleConfiguration.stringValue(forKey: "SounderChatProvider")?.lowercased() ?? "claude"
+    }
+
+    /// Model id for the chosen provider. Nil lets the Worker fill in its configured
+    /// default so the model can change without a rebuild.
     static var chatModel: String? {
         AppBundleConfiguration.stringValue(forKey: "SounderChatModel")
     }

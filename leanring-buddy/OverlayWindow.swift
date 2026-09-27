@@ -240,6 +240,21 @@ struct BlueCursorView: View {
             // highlights). Rendered beneath the cursor so the buddy stays on top.
             DrawingLayerView(model: companionManager.drawingLayerModel, screenFrame: screenFrame)
 
+            // Spatial context: the path the user traces while holding the hotkey.
+            if companionManager.gesturePathPointsGlobal.count >= 2 {
+                Path { path in
+                    let points = companionManager.gesturePathPointsGlobal
+                        .filter { screenFrame.contains($0) }
+                        .map { convertScreenPointToSwiftUICoordinates($0) }
+                    guard let first = points.first else { return }
+                    path.move(to: first)
+                    for point in points.dropFirst() { path.addLine(to: point) }
+                }
+                .stroke(DS.Colors.overlayCursorBlue.opacity(0.9), style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round, dash: [7, 5]))
+                .shadow(color: DS.Colors.overlayCursorBlue.opacity(0.6), radius: 4)
+                .allowsHitTesting(false)
+            }
+
             // Welcome speech bubble (first launch only)
             if isCursorOnThisScreen && showWelcome && !welcomeText.isEmpty {
                 Text(welcomeText)

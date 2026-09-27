@@ -15,6 +15,7 @@ nonisolated enum DrawingColor: Sendable {
     case blue
     case yellow
     case orange
+    case green
 }
 
 nonisolated enum DrawingPrimitive: Identifiable, Sendable {

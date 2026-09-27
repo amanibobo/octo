@@ -6,17 +6,20 @@
  *
  * Routes:
  *   GET  /health            → which upstreams are configured (no secrets returned)
+ *   POST /claude            → Anthropic Messages API (Claude: vision + tool-forced JSON) — the main model
  *   POST /chat              → Fireworks chat completions (OpenAI-compatible, vision + JSON schema, streaming passthrough)
  *   POST /transcribe        → Fireworks Whisper (multipart passthrough, returns {"text": ...})
  *   POST /tts               → ElevenLabs text-to-speech (optional; 503 when no key is configured)
  *   POST /transcribe-token  → AssemblyAI short-lived streaming token (optional legacy path; 503 when no key)
  *   ANY  /analysis/*        → passthrough to the Python analysis service when ANALYSIS_BACKEND_URL is set
  *
- * Secrets (wrangler secret put ...): FIREWORKS_API_KEY, ELEVENLABS_API_KEY, ASSEMBLYAI_API_KEY
+ * Secrets (wrangler secret put ...): ANTHROPIC_API_KEY, FIREWORKS_API_KEY, ELEVENLABS_API_KEY, ASSEMBLYAI_API_KEY
  * Vars (wrangler.toml): FIREWORKS_CHAT_MODEL, FIREWORKS_TRANSCRIPTION_MODEL, ELEVENLABS_VOICE_ID, ANALYSIS_BACKEND_URL
  */
 
 interface Env {
+  ANTHROPIC_API_KEY?: string;
+  CLAUDE_MODEL?: string;
   FIREWORKS_API_KEY?: string;
   FIREWORKS_CHAT_MODEL?: string;
   FIREWORKS_TRANSCRIPTION_MODEL?: string;
@@ -32,6 +35,8 @@ const FIREWORKS_CHAT_COMPLETIONS_URL = "https://api.fireworks.ai/inference/v1/ch
 // default to the turbo host and let wrangler.toml override it if needed.
 const FIREWORKS_TRANSCRIPTION_URL = "https://audio-turbo.us-virginia-1.direct.fireworks.ai/v1/audio/transcriptions";
 const DEFAULT_FIREWORKS_CHAT_MODEL = "accounts/fireworks/routers/kimi-k3-fast";
+const ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages";
+const DEFAULT_CLAUDE_MODEL = "claude-sonnet-5";
 const DEFAULT_FIREWORKS_TRANSCRIPTION_MODEL = "whisper-v3-turbo";
 
 export default {
@@ -53,6 +58,10 @@ export default {
 
       if (url.pathname === "/chat") {
         return await handleChat(request, env);
+      }
+
+      if (url.pathname === "/claude") {
+        return await handleClaude(request, env);
       }
 
       if (url.pathname === "/transcribe") {
@@ -85,6 +94,8 @@ function jsonResponse(payload: unknown, status = 200): Response {
 function handleHealth(env: Env): Response {
   return jsonResponse({
     ok: true,
+    claudeConfigured: Boolean(env.ANTHROPIC_API_KEY),
+    claudeModel: env.CLAUDE_MODEL || DEFAULT_CLAUDE_MODEL,
     fireworksConfigured: Boolean(env.FIREWORKS_API_KEY),
     chatModel: env.FIREWORKS_CHAT_MODEL || DEFAULT_FIREWORKS_CHAT_MODEL,
     transcriptionModel: env.FIREWORKS_TRANSCRIPTION_MODEL || DEFAULT_FIREWORKS_TRANSCRIPTION_MODEL,
@@ -141,6 +152,45 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
       "content-type": upstreamResponse.headers.get("content-type") || "application/json",
       "cache-control": "no-cache",
     },
+  });
+}
+
+/**
+ * Forwards an Anthropic Messages API request (vision + tool-forced JSON) to
+ * Claude. The default model is injected when the app omits it.
+ */
+async function handleClaude(request: Request, env: Env): Promise<Response> {
+  if (!env.ANTHROPIC_API_KEY) {
+    return jsonResponse({ error: "ANTHROPIC_API_KEY is not configured on the Worker" }, 503);
+  }
+
+  let requestBody: Record<string, unknown>;
+  try {
+    requestBody = (await request.json()) as Record<string, unknown>;
+  } catch {
+    return jsonResponse({ error: "Request body must be JSON" }, 400);
+  }
+  if (!requestBody.model) {
+    requestBody.model = env.CLAUDE_MODEL || DEFAULT_CLAUDE_MODEL;
+  }
+
+  const upstreamResponse = await fetch(ANTHROPIC_MESSAGES_URL, {
+    method: "POST",
+    headers: {
+      "x-api-key": env.ANTHROPIC_API_KEY,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(requestBody),
+  });
+
+  const responseText = await upstreamResponse.text();
+  if (!upstreamResponse.ok) {
+    console.error(`[/claude] Anthropic error ${upstreamResponse.status}: ${responseText}`);
+  }
+  return new Response(responseText, {
+    status: upstreamResponse.status,
+    headers: { "content-type": "application/json", "cache-control": "no-cache" },
   });
 }
 

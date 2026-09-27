@@ -15,16 +15,11 @@ struct FireworksChatError: LocalizedError {
 }
 
 @MainActor
-final class FireworksChatClient {
-    struct ChatImage {
-        let data: Data
-        let mimeType: String
-    }
+final class FireworksChatClient: ChatModelClient {
+    typealias ChatImage = ChatModelImage
+    typealias PriorTurn = ChatModelPriorTurn
 
-    struct PriorTurn {
-        let userText: String
-        let assistantText: String
-    }
+    var displayName: String { "Fireworks (\(model ?? "worker default"))" }
 
     private let chatURL: URL
     /// Nil means "let the Worker choose its configured default model".
@@ -47,11 +42,11 @@ final class FireworksChatClient {
     func completeJSON(
         systemPrompt: String,
         userText: String,
-        images: [ChatImage] = [],
-        priorTurns: [PriorTurn] = [],
+        images: [ChatImage],
+        priorTurns: [PriorTurn],
         jsonSchema: [String: Any],
-        maxTokens: Int = 700,
-        timeoutSeconds: TimeInterval = 25
+        maxTokens: Int,
+        timeoutSeconds: TimeInterval
     ) async throws -> [String: Any] {
         let responseText = try await complete(
             systemPrompt: systemPrompt,
@@ -74,8 +69,8 @@ final class FireworksChatClient {
     func completeText(
         systemPrompt: String,
         userText: String,
-        maxTokens: Int = 400,
-        timeoutSeconds: TimeInterval = 12
+        maxTokens: Int,
+        timeoutSeconds: TimeInterval
     ) async throws -> String {
         try await complete(
             systemPrompt: systemPrompt,

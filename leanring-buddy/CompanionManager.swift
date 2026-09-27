@@ -62,6 +62,15 @@ final class CompanionManager: ObservableObject {
     @Published private(set) var isAnalysisServiceReachable = false
     @Published private(set) var isWorkerReachable = false
     @Published private(set) var lastInteractionReport: SounderInteractionReport?
+
+    /// Spatial context: cursor positions (global AppKit coords) sampled while the
+    /// hotkey is held. Drawn as a trail by the overlay; the bounding box becomes
+    /// the region of interest for the question when it is big enough to be a gesture.
+    @Published private(set) var gesturePathPointsGlobal: [CGPoint] = []
+    private var gestureSamplingTimer: Timer?
+    private var pendingGestureBoundsGlobal: CGRect?
+    private var lastRegionOfInterestInCapturePixels: CGRect?
+    private static let minimumGestureSizeInPoints: CGFloat = 30
     @Published private(set) var isRunningCalibration = false
 
     let buddyDictationManager: BuddyDictationManager
@@ -69,7 +78,7 @@ final class CompanionManager: ObservableObject {
     let overlayWindowManager = OverlayWindowManager()
     let drawingLayerModel = DrawingLayerModel()
 
-    private let chatClient: FireworksChatClient
+    private let chatClient: any ChatModelClient
     private let analysisClient: AnalysisServiceClient
     private let speechOutput: any SpeechOutputClient
     /// Used only when the configured speech provider fails (e.g. ElevenLabs credits).
@@ -83,7 +92,7 @@ final class CompanionManager: ObservableObject {
     var speechOutputDisplayName: String { speechOutput.displayName }
 
     /// Conversation history for General mode so follow-ups make sense.
-    private var conversationHistory: [FireworksChatClient.PriorTurn] = []
+    private var conversationHistory: [ChatModelPriorTurn] = []
 
     /// The plan of the last Data-mode run, reused when the table is edited and re-run.
     private var lastDataModePlan: DataModePlan?
@@ -96,6 +105,7 @@ final class CompanionManager: ObservableObject {
         let table: ExtractedTable?
         let chart: ChartRegion?
         let clinicalReading: ClinicalScreenReading
+        let regionOfInterestInCapturePixels: CGRect?
         let captureSeconds: Double
         let ocrSeconds: Double
     }
@@ -125,7 +135,11 @@ final class CompanionManager: ObservableObject {
 
     init() {
         let workerBaseURL = SounderConfiguration.workerBaseURL
-        self.chatClient = FireworksChatClient(workerBaseURL: workerBaseURL, model: SounderConfiguration.chatModel)
+        if SounderConfiguration.chatProvider == "fireworks" {
+            self.chatClient = FireworksChatClient(workerBaseURL: workerBaseURL, model: SounderConfiguration.chatModel)
+        } else {
+            self.chatClient = ClaudeChatClient(workerBaseURL: workerBaseURL, model: SounderConfiguration.chatModel)
+        }
         self.analysisClient = AnalysisServiceClient(baseURL: SounderConfiguration.analysisServiceBaseURL)
 
         switch SounderConfiguration.speechOutputProvider {
@@ -466,6 +480,7 @@ final class CompanionManager: ObservableObject {
             clearDetectedElementLocation()
 
             ClickyAnalytics.trackPushToTalkStarted()
+            beginGestureSampling()
 
             pendingKeyboardShortcutStartTask?.cancel()
             pendingKeyboardShortcutStartTask = Task {
@@ -487,6 +502,7 @@ final class CompanionManager: ObservableObject {
             pendingKeyboardShortcutStartTask?.cancel()
             pendingKeyboardShortcutStartTask = nil
             buddyDictationManager.stopPushToTalkFromKeyboardShortcut()
+            endGestureSampling()
             // Read the screen now, in parallel with transcription.
             if buddyDictationManager.isDictationInProgress {
                 pendingScreenAnalysisTask?.cancel()
@@ -531,7 +547,7 @@ final class CompanionManager: ObservableObject {
             if !isRerunAfterEdit, let pendingTask = pendingScreenAnalysisTask {
                 screenAnalysisTask = pendingTask
             } else {
-                screenAnalysisTask = makeScreenAnalysisTask()
+                screenAnalysisTask = makeScreenAnalysisTask(isRerunAfterEdit: isRerunAfterEdit)
             }
             pendingScreenAnalysisTask = nil
             let screenAnalysis = try await screenAnalysisTask.value
@@ -561,12 +577,13 @@ final class CompanionManager: ObservableObject {
             }
 
             // 3. Route. Rx first: a chart with medications plus a clinical question.
-            let clinicalReading = screenAnalysis.clinicalReading
+            let regionOfInterest = screenAnalysis.regionOfInterestInCapturePixels
+            let clinicalReading = ClinicalModePipeline.scoped(screenAnalysis.clinicalReading, to: regionOfInterest)
             let clinicalIntent = ClinicalModePipeline.intent(for: transcript)
             let shouldTryClinicalMode = selectedMode == .clinical
                 || (selectedMode == .automatic && clinicalIntent != .none && !clinicalReading.isEmpty)
             if shouldTryClinicalMode {
-                try await runClinicalMode(intent: clinicalIntent, reading: clinicalReading, capture: capture, report: &report, isRerunAfterEdit: isRerunAfterEdit)
+                try await runClinicalMode(intent: clinicalIntent, reading: clinicalReading, capture: capture, regionOfInterest: regionOfInterest, report: &report, isRerunAfterEdit: isRerunAfterEdit)
                 finishReport(&report, startedAt: interactionStartedAt)
                 return
             }
@@ -622,7 +639,7 @@ final class CompanionManager: ObservableObject {
                 // Auto mode: the planner said this is not a data question → General.
             }
 
-            try await runGeneralMode(transcript: transcript, capture: capture, elements: elements, report: &report)
+            try await runGeneralMode(transcript: transcript, capture: capture, elements: elements, regionOfInterest: regionOfInterest, report: &report)
             finishReport(&report, startedAt: interactionStartedAt)
         } catch is CancellationError {
             // User spoke again — interaction was interrupted.
@@ -709,10 +726,11 @@ final class CompanionManager: ObservableObject {
         intent: ClinicalIntent,
         reading: ClinicalScreenReading,
         capture: SounderScreenCapture,
+        regionOfInterest: CGRect?,
         report: inout SounderInteractionReport,
         isRerunAfterEdit: Bool
     ) async throws {
-        report.modeUsed = "Rx"
+        report.modeUsed = regionOfInterest == nil ? "Rx" : "Rx (circled)"
         report.tableRowCount = reading.medications.count
         report.tableColumnCount = reading.conditions.count
         report.extractionSource = "ondevice-ner"
@@ -729,7 +747,9 @@ final class CompanionManager: ObservableObject {
         case .evidence(let conditionQuery):
             report.analysisTask = "evidence"
             if !isRerunAfterEdit { try? await speechOutput.speakText("pulling the latest evidence") }
-            outcome = try await clinicalModePipeline.evidence(reading: reading, conditionQuery: conditionQuery)
+            // Circling a single drug and asking "what's new on this?" scopes the evidence to it.
+            let circledDrug = (regionOfInterest != nil && reading.medications.count == 1) ? reading.medications[0].name : nil
+            outcome = try await clinicalModePipeline.evidence(reading: reading, conditionQuery: conditionQuery, drug: circledDrug)
         case .checkMedications, .none:
             report.analysisTask = "check"
             guard !reading.medications.isEmpty else {
@@ -743,7 +763,8 @@ final class CompanionManager: ObservableObject {
         report.metricText = outcome.metricText
         try Task.checkCancellation()
 
-        drawingLayerModel.show(outcome.primitives, geometry: capture.geometry, autoClearAfterSeconds: 90)
+        drawingLayerModel.show(outcome.primitives + regionOutlinePrimitives(regionOfInterest), geometry: capture.geometry, autoClearAfterSeconds: 90)
+        gesturePathPointsGlobal = []
         ClickyAnalytics.trackAIResponseReceived(response: outcome.spokenText)
         try await speak(isRerunAfterEdit ? "updated. " + outcome.spokenText : outcome.spokenText)
 
@@ -772,9 +793,10 @@ final class CompanionManager: ObservableObject {
         transcript: String,
         capture: SounderScreenCapture,
         elements: [ScreenElement],
+        regionOfInterest: CGRect?,
         report: inout SounderInteractionReport
     ) async throws {
-        report.modeUsed = "General"
+        report.modeUsed = regionOfInterest == nil ? "General" : "General (circled)"
         // Instant (pre-synthesized) so the wait for the vision model is not silent.
         try? await speechOutput.speakText("let me look")
         let answerStartedAt = Date()
@@ -782,23 +804,22 @@ final class CompanionManager: ObservableObject {
             transcript: transcript,
             capture: capture,
             elements: elements,
+            regionOfInterestInCapturePixels: regionOfInterest,
             conversationHistory: conversationHistory
         )
         report.planSeconds = Date().timeIntervalSince(answerStartedAt)
         try Task.checkCancellation()
 
-        conversationHistory.append(FireworksChatClient.PriorTurn(userText: transcript, assistantText: answer.spokenText))
+        conversationHistory.append(ChatModelPriorTurn(userText: transcript, assistantText: answer.spokenText))
         if conversationHistory.count > 10 {
             conversationHistory.removeFirst(conversationHistory.count - 10)
         }
 
-        if !answer.highlightedElements.isEmpty {
-            drawingLayerModel.show(
-                DrawingOpsBuilder.highlightElements(answer.highlightedElements),
-                geometry: capture.geometry,
-                autoClearAfterSeconds: 12
-            )
+        let highlightPrimitives = DrawingOpsBuilder.highlightElements(answer.highlightedElements) + regionOutlinePrimitives(regionOfInterest)
+        if !highlightPrimitives.isEmpty {
+            drawingLayerModel.show(highlightPrimitives, geometry: capture.geometry, autoClearAfterSeconds: 12)
         }
+        gesturePathPointsGlobal = []
 
         if let pointedElement = answer.pointedElement {
             // Switch to idle BEFORE setting the location so the triangle is visible and can fly.
@@ -831,6 +852,7 @@ final class CompanionManager: ObservableObject {
     }
 
     private func finishReport(_ report: inout SounderInteractionReport, startedAt: Date) {
+        gesturePathPointsGlobal = []
         report.totalSeconds = Date().timeIntervalSince(startedAt)
         lastInteractionReport = report
         print("⏱️ \(report.modeUsed): capture \(String(format: "%.2f", report.captureSeconds))s, ocr \(String(format: "%.2f", report.ocrSeconds))s, plan \(String(format: "%.2f", report.planSeconds))s, analysis \(String(format: "%.2f", report.analysisSeconds))s, total \(String(format: "%.2f", report.totalSeconds))s")
@@ -847,9 +869,50 @@ final class CompanionManager: ObservableObject {
         return "something went wrong on my end. try that once more."
     }
 
+    // MARK: - Spatial context (circle gesture)
+
+    private func beginGestureSampling() {
+        gestureSamplingTimer?.invalidate()
+        gesturePathPointsGlobal = []
+        pendingGestureBoundsGlobal = nil
+        gestureSamplingTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let location = NSEvent.mouseLocation
+                if let last = self.gesturePathPointsGlobal.last, hypot(location.x - last.x, location.y - last.y) < 1.5 { return }
+                self.gesturePathPointsGlobal.append(location)
+            }
+        }
+    }
+
+    private func endGestureSampling() {
+        gestureSamplingTimer?.invalidate()
+        gestureSamplingTimer = nil
+        guard gesturePathPointsGlobal.count >= 8 else {
+            gesturePathPointsGlobal = []
+            pendingGestureBoundsGlobal = nil
+            return
+        }
+        let xs = gesturePathPointsGlobal.map(\.x)
+        let ys = gesturePathPointsGlobal.map(\.y)
+        let bounds = CGRect(x: xs.min()!, y: ys.min()!, width: xs.max()! - xs.min()!, height: ys.max()! - ys.min()!)
+        // A small wiggle while holding the key is not a gesture.
+        if bounds.width >= Self.minimumGestureSizeInPoints, bounds.height >= Self.minimumGestureSizeInPoints {
+            pendingGestureBoundsGlobal = bounds.insetBy(dx: -6, dy: -6)
+        } else {
+            gesturePathPointsGlobal = []
+            pendingGestureBoundsGlobal = nil
+        }
+    }
+
+    private func regionOutlinePrimitives(_ regionOfInterest: CGRect?) -> [DrawingPrimitive] {
+        guard let regionOfInterest else { return [] }
+        return [.circle(id: "region-of-interest", rectInCapturePixels: regionOfInterest, tagNumber: nil, color: .green)]
+    }
+
     // MARK: - Screen analysis
 
-    private func makeScreenAnalysisTask() -> Task<ScreenAnalysis, Error> {
+    private func makeScreenAnalysisTask(isRerunAfterEdit: Bool = false) -> Task<ScreenAnalysis, Error> {
         Task { @MainActor in
             let captureStartedAt = Date()
             let capture = try await NativeScreenCaptureUtility.captureDisplayUnderCursor()
@@ -868,11 +931,30 @@ final class CompanionManager: ObservableObject {
             let table = TableExtractor.extractTable(from: textLines, imageSize: capture.pixelSize)
             let chart = ChartRegionDetector.detectChart(in: textLines, imageSize: capture.pixelSize, excluding: table?.tableBoundingBoxInCapturePixels)
             let clinicalReading = ClinicalEntityExtractor.extract(from: textLines, lexicon: clinicalLexicon)
+
+            // Region of interest from the circle gesture, in capture pixels.
+            var regionOfInterest: CGRect?
+            if let gestureBounds = pendingGestureBoundsGlobal {
+                let displayFrame = capture.geometry.displayFrame
+                let localRect = CGRect(x: gestureBounds.minX - displayFrame.minX, y: displayFrame.maxY - gestureBounds.maxY,
+                                       width: gestureBounds.width, height: gestureBounds.height)
+                let fullBounds = CGRect(x: 0, y: 0, width: capture.cgImage.width, height: capture.cgImage.height)
+                let region = capture.geometry.capturePixelRect(fromDisplayPointRect: localRect).intersection(fullBounds)
+                regionOfInterest = region.isNull || region.isEmpty ? nil : region
+                pendingGestureBoundsGlobal = nil
+                lastRegionOfInterestInCapturePixels = regionOfInterest
+                if let regionOfInterest { print("🔵 Circled region: \(regionOfInterest.integral) capture px") }
+            } else if isRerunAfterEdit {
+                regionOfInterest = lastRegionOfInterestInCapturePixels
+            } else {
+                lastRegionOfInterestInCapturePixels = nil
+            }
             if !clinicalReading.isEmpty {
                 print("💊 Chart: \(clinicalReading.medications.count) meds \(clinicalReading.medications.map { "\($0.name) \($0.doseMilligrams.map { "\($0)mg" } ?? "")×\($0.dosesPerDay ?? 0)" }), \(clinicalReading.conditions.count) conditions \(clinicalReading.conditions.map(\.canonicalName)), labs \(clinicalReading.labs.map { "\($0.key)=\($0.value)" }), age \(clinicalReading.ageYears ?? -1) \(clinicalReading.sex ?? "")")
             }
             return ScreenAnalysis(capture: capture, textLines: textLines, elements: elements, table: table, chart: chart,
-                                  clinicalReading: clinicalReading, captureSeconds: captureSeconds, ocrSeconds: ocrSeconds)
+                                  clinicalReading: clinicalReading, regionOfInterestInCapturePixels: regionOfInterest,
+                                  captureSeconds: captureSeconds, ocrSeconds: ocrSeconds)
         }
     }
 
