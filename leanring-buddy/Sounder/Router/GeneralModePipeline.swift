@@ -20,6 +20,7 @@ final class GeneralModePipeline {
     }
 
     private let chatClient: FireworksChatClient
+    private static let maximumElementsSentToModel = 100
 
     init(chatClient: FireworksChatClient) {
         self.chatClient = chatClient
@@ -28,7 +29,7 @@ final class GeneralModePipeline {
     private static let systemPrompt = """
     you're sounder, a friendly companion that lives in the user's menu bar. the user just spoke to you via push-to-talk and you can see their screen. your reply is spoken aloud, so write the way you'd talk: one or two short sentences, all lowercase, casual, no lists, no markdown, no emojis. spell out small numbers. never say "simply" or "just". if they ask for more detail, go deeper.
 
-    the screenshot has numbered red tags. each tag is an element id from the list you are given. when pointing at something on screen would genuinely help (finding a button, a menu, a cell, a field), return that element's id in point_element_id and a 1-3 word point_label. if nothing on screen is worth pointing at, return null. you may also return a few highlight_element_ids to light up related text. only use ids from the list.
+    the screenshot has numbered red tags. each tag is an element id from the list you are given. point (point_element_id + a 1-3 word point_label) only when the user is asking where something is, how to do something, or what to click, and the thing is on screen. for descriptive questions ("what do you see", "what is this") return null and do not point. you may also return a few highlight_element_ids to light up related text. only use ids from the list.
 
     if the question is about a table on screen, answer what you can see, and mention that saying "what drives" or "what's weird here" makes you run a real model on it.
     """
@@ -51,13 +52,15 @@ final class GeneralModePipeline {
         conversationHistory: [FireworksChatClient.PriorTurn]
     ) async throws -> Answer {
         var images: [FireworksChatClient.ChatImage] = []
-        if let markedScreenshot = SetOfMarkRenderer.renderMarkedScreenshot(capture: capture.cgImage, elements: elements) {
+        // 1280px is enough to read tags and costs half the upload/vision time of 1568px.
+        let groundingElements = Array(elements.prefix(Self.maximumElementsSentToModel))
+        if let markedScreenshot = SetOfMarkRenderer.renderMarkedScreenshot(capture: capture.cgImage, elements: groundingElements, maximumWidth: 1280) {
             images.append(FireworksChatClient.ChatImage(data: markedScreenshot.data, mimeType: "image/jpeg"))
         } else if let plainScreenshot = NativeScreenCaptureUtility.makeDownscaledJPEG(from: capture.cgImage) {
             images.append(FireworksChatClient.ChatImage(data: plainScreenshot.data, mimeType: "image/jpeg"))
         }
 
-        let elementListText = elements.map { element in
+        let elementListText = groundingElements.map { element in
             "[\(element.id)] \(String(element.text.prefix(70)))"
         }.joined(separator: "\n")
 

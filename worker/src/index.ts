@@ -159,17 +159,16 @@ async function handleTranscribe(request: Request, env: Env): Promise<Response> {
     return jsonResponse({ error: "Expected multipart/form-data with a 'file' field" }, 400);
   }
 
-  // Re-read the form so the Worker can guarantee a model field is present even
-  // if the client did not send one. This buffers the (small) push-to-talk clip.
-  const incomingForm = await request.formData();
-  if (!incomingForm.has("model")) {
-    incomingForm.set("model", env.FIREWORKS_TRANSCRIPTION_MODEL || DEFAULT_FIREWORKS_TRANSCRIPTION_MODEL);
-  }
-
+  // Stream the multipart body through untouched. Re-parsing it with formData()
+  // and re-encoding added seconds per clip in wrangler's local runtime. The app
+  // always includes the model field itself.
   const upstreamResponse = await fetch(FIREWORKS_TRANSCRIPTION_URL, {
     method: "POST",
-    headers: { authorization: env.FIREWORKS_API_KEY },
-    body: incomingForm,
+    headers: {
+      authorization: env.FIREWORKS_API_KEY,
+      "content-type": contentType,
+    },
+    body: request.body,
   });
 
   const responseText = await upstreamResponse.text();

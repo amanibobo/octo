@@ -52,8 +52,10 @@ AVSpeechSynthesizer (or ElevenLabs via /tts) ◄── deterministic sentence fr
 | Cell-value accuracy vs ground truth | ~90% (misses are O/0 confusions in synthetic IDs) |
 | Chart axis calibration error | < 2 px |
 | Analysis: drivers (HistGradientBoosting, 1200 rows) | < 1 s train, held-out AUC > 0.7 on synthetic churn |
-| Planner round trip (Fireworks kimi-k3-fast, JSON schema) | ~1.3 s |
-| Whisper round trip (Fireworks, via Worker, warm) | ~0.2 s |
+| Planner | 0 s for anomaly/drivers/fit phrasing (keyword router); Fireworks kimi-k3-fast ~1.2 s with `reasoning_effort: none` when consulted |
+| General-mode vision answer (1280px Set-of-Mark, ≤100 elements) | ~1.2 s |
+| Whisper round trip (Fireworks) | 0.2–10 s, erratic on clips over ~5 s, hence on-device transcription by default |
+| ElevenLabs flash per sentence (via Worker) | ~0.3 s; OCR runs during transcription so it adds nothing on the critical path |
 
 Real-screenshot eval and the RF-DETR extractor numbers are still to be recorded (see *Status*).
 
@@ -107,12 +109,13 @@ Do **not** build from the terminal with `xcodebuild`: it invalidates the TCC per
 | `SounderWorkerBaseURL` | `http://127.0.0.1:8787` | Cloudflare Worker proxy |
 | `SounderAnalysisBaseURL` | `https://amanibobo1--sounder-analysis-serve.modal.run` | Python analysis service (Modal, one warm container). Set to `http://127.0.0.1:8000` to use a local uvicorn |
 | `SounderChatModel` | `accounts/fireworks/routers/kimi-k3-fast` | Fireworks model (must support images + JSON schema) |
-| `SounderSpeechOutputProvider` | `system` | `system` (AVSpeechSynthesizer, offline) or `elevenlabs` |
-| `SounderUsesLLMNarration` | `true` | Let the LLM rephrase result sentences (numbers are verified) |
-| `VoiceTranscriptionProvider` | `fireworks` | `fireworks`, `apple` (offline), `assemblyai`, `openai` |
+| `SounderSpeechOutputProvider` | `elevenlabs` | `elevenlabs` (Worker `/tts`, ~0.3 s per sentence, pipelined), `kokoro` (Modal, no key; `services/modal_tts.py`) or `system` (offline) |
+| `SounderTTSBaseURL` | Modal Kokoro URL | Only used with the `kokoro` provider |
+| `SounderUsesLLMNarration` | `false` | Let the LLM rephrase result sentences (adds 2–5 s; numbers are verified) |
+| `VoiceTranscriptionProvider` | `fireworks` | Cloud transcription backend when the panel's "On-device transcription" toggle is off. On-device Apple Speech is the default because Fireworks Whisper measured 2–10 s per clip |
 | `PostHogAPIKey` | unset | Analytics stay off unless set |
 
-Panel toggles: **Clipboard fallback** (⌘A/⌘C when OCR < 90%), **Offline voice** (Apple Speech), **Show Sounder** (persistent vs. transient cursor).
+Panel toggles: **Clipboard fallback** (⌘A/⌘C when OCR < 90%), **On-device transcription** (Apple Speech, default on; off = Fireworks Whisper), **Show Sounder** (persistent vs. transient cursor).
 
 ## Status vs. the PRD
 
@@ -122,7 +125,7 @@ Panel toggles: **Clipboard fallback** (⌘A/⌘C when OCR < 90%), **Offline voic
 | Clipboard extraction path wired to analysis + drawing | done, gated on OCR confidence |
 | `anomaly`, `drivers` end to end | done, tested against synthetic Telco-shaped data |
 | `fit` over a detected chart | done for numeric axes; date/categorical axes not calibrated |
-| Speech-to-speech voice with typed tools | Fireworks Whisper → Fireworks LLM (JSON-schema planner) → system voice. Grok Voice was replaced by Fireworks per the team's key; ElevenLabs optional |
+| Speech-to-speech voice with typed tools | Apple on-device speech (or Fireworks Whisper) → keyword planner, Fireworks LLM only when needed → ElevenLabs flash (pipelined per sentence, fillers pre-synthesized). Grok Voice replaced per the team's keys |
 | General mode with Set-of-Mark grounding by ID | done (OCR text elements; no icon/button detector yet) |
 | Edit-and-re-run diffing | done (table region watcher, fires once the screen settles) |
 | Offline fallback | Apple Speech + keyword planner + local analysis service; General mode needs the network |

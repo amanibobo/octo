@@ -1,28 +1,29 @@
 //
-//  ElevenLabsTTSClient.swift
+//  KokoroTTSClient.swift
 //  leanring-buddy
 //
-//  Text-to-speech through the Worker's /tts route (ElevenLabs eleven_flash_v2_5).
-//  Answers are split into sentences and played as each one arrives, and a few
-//  fixed filler phrases are synthesized once at launch, so the first thing the
-//  user hears starts within a few hundred milliseconds of the result.
+//  Neural text-to-speech via the Kokoro-82M service on Modal (services/modal_tts.py).
+//  No API key involved. Kokoro on CPU renders about three seconds of audio per
+//  second, so long answers are split into sentences and played as each one
+//  arrives; a few fixed filler phrases are synthesized once at launch so the
+//  first thing the user hears is instant.
 //
 
 import AVFoundation
 import Foundation
 
-struct ElevenLabsTTSError: LocalizedError {
+struct KokoroTTSError: LocalizedError {
     let message: String
     var errorDescription: String? { message }
 }
 
-final class ElevenLabsTTSClient: NSObject, SpeechOutputClient, AVAudioPlayerDelegate {
-    let displayName = "ElevenLabs"
+final class KokoroTTSClient: NSObject, SpeechOutputClient, AVAudioPlayerDelegate {
+    let displayName = "Kokoro (Modal)"
 
-    private let proxyURL: URL
+    private let ttsURL: URL
     private let urlSession: URLSession
 
-    /// Synthesized audio by normalized phrase (fillers and repeated sentences).
+    /// Synthesized WAV data by normalized phrase, for fillers and repeated sentences.
     private var audioCache: [String: Data] = [:]
     private var playbackQueue: [Data] = []
     private var currentPlayer: AVAudioPlayer?
@@ -33,8 +34,8 @@ final class ElevenLabsTTSClient: NSObject, SpeechOutputClient, AVAudioPlayerDele
         (currentPlayer?.isPlaying ?? false) || !playbackQueue.isEmpty || pendingSentenceCount > 0
     }
 
-    init(proxyURL: String) {
-        self.proxyURL = URL(string: proxyURL)!
+    init(ttsBaseURL: String) {
+        self.ttsURL = URL(string: ttsBaseURL)!
 
         let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = 30
@@ -44,19 +45,19 @@ final class ElevenLabsTTSClient: NSObject, SpeechOutputClient, AVAudioPlayerDele
         super.init()
     }
 
-    /// Synthesizes phrases ahead of time so they play with zero latency.
+    /// Synthesizes phrases ahead of time (fillers) so they play with zero latency.
     func prefetch(_ phrases: [String]) {
         Task { [weak self] in
             for phrase in phrases {
                 guard let self else { return }
                 _ = try? await self.fetchAudio(for: phrase)
             }
-            print("🔊 ElevenLabs: \(phrases.count) filler phrases cached")
+            print("🔊 Kokoro: \(phrases.count) filler phrases cached")
         }
     }
 
-    /// Appends to the playback queue, so a filler keeps playing until the answer's
-    /// first sentence is ready. Returns once that first sentence is queued.
+    /// Appends to the playback queue (a filler keeps playing until the answer's
+    /// first sentence is ready). Returns once the first sentence is queued.
     /// A new push-to-talk press calls stopPlayback() explicitly.
     func speakText(_ text: String) async throws {
         let sentences = SpeechChunker.splitIntoSpeakableChunks(text)
@@ -83,14 +84,13 @@ final class ElevenLabsTTSClient: NSObject, SpeechOutputClient, AVAudioPlayerDele
                 if let audio = try? await self.fetchAudio(for: sentence), !Task.isCancelled {
                     self.enqueue(audio)
                 } else {
-                    print("⚠️ ElevenLabs: dropped a sentence (\(sentence.prefix(40))...)")
+                    print("⚠️ Kokoro: dropped a sentence (\(sentence.prefix(40))...)")
                 }
                 self.pendingSentenceCount = max(0, self.pendingSentenceCount - 1)
             }
         }
     }
 
-    /// Stops any in-progress playback immediately.
     func stopPlayback() {
         sentenceFetchTask?.cancel()
         sentenceFetchTask = nil
@@ -106,31 +106,22 @@ final class ElevenLabsTTSClient: NSObject, SpeechOutputClient, AVAudioPlayerDele
         let cacheKey = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         if let cached = audioCache[cacheKey] { return cached }
 
-        var request = URLRequest(url: proxyURL)
+        var request = URLRequest(url: ttsURL)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("audio/mpeg", forHTTPHeaderField: "Accept")
-        let body: [String: Any] = [
-            "text": text,
-            "model_id": "eleven_flash_v2_5",
-            "voice_settings": [
-                "stability": 0.5,
-                "similarity_boost": 0.75
-            ]
-        ]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["text": text, "speed": 1.05])
 
         let startedAt = Date()
         let (data, response) = try await urlSession.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
-            throw ElevenLabsTTSError(message: "tts proxy returned an invalid response")
+            throw KokoroTTSError(message: "tts service returned an invalid response")
         }
         guard (200...299).contains(httpResponse.statusCode), !data.isEmpty else {
-            let errorBody = String(data: data, encoding: .utf8) ?? "unknown error"
-            throw ElevenLabsTTSError(message: "TTS API error (\(httpResponse.statusCode)): \(errorBody.prefix(200))")
+            throw KokoroTTSError(message: "tts failed (HTTP \(httpResponse.statusCode))")
         }
-        print("🔊 ElevenLabs: \(String(format: "%.2f", Date().timeIntervalSince(startedAt)))s for \(text.count) chars")
+        print("🔊 Kokoro: \(String(format: "%.2f", Date().timeIntervalSince(startedAt)))s for \(text.count) chars")
 
+        // Keep the cache bounded; fillers are short and get re-added on demand.
         if audioCache.count > 40 { audioCache.removeAll() }
         audioCache[cacheKey] = data
         return data
@@ -155,7 +146,7 @@ final class ElevenLabsTTSClient: NSObject, SpeechOutputClient, AVAudioPlayerDele
             currentPlayer = player
             player.play()
         } catch {
-            print("⚠️ ElevenLabs: could not play audio: \(error)")
+            print("⚠️ Kokoro: could not play audio: \(error)")
             playNextQueuedAudio()
         }
     }
@@ -164,47 +155,5 @@ final class ElevenLabsTTSClient: NSObject, SpeechOutputClient, AVAudioPlayerDele
 
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         Task { @MainActor [weak self] in self?.playNextQueuedAudio() }
-    }
-}
-
-/// Shared sentence splitter for pipelined speech clients.
-nonisolated enum SpeechChunker {
-    /// Splits text at sentence ends, then at commas for long sentences, and merges
-    /// fragments too short to be worth a round trip.
-    static func splitIntoSpeakableChunks(_ text: String, maximumChunkLength: Int = 160) -> [String] {
-        let sentencePattern = try! NSRegularExpression(pattern: #"[^.!?]+[.!?]*"#)
-        let matches = sentencePattern.matches(in: text, range: NSRange(text.startIndex..., in: text))
-        var sentences = matches.compactMap { match -> String? in
-            guard let range = Range(match.range, in: text) else { return nil }
-            let sentence = text[range].trimmingCharacters(in: .whitespacesAndNewlines)
-            return sentence.isEmpty ? nil : sentence
-        }
-
-        sentences = sentences.flatMap { sentence -> [String] in
-            guard sentence.count > maximumChunkLength else { return [sentence] }
-            var chunks: [String] = []
-            var current = ""
-            for part in sentence.split(whereSeparator: { $0 == "," || $0 == ";" }) {
-                let piece = part.trimmingCharacters(in: .whitespaces)
-                if current.count + piece.count > maximumChunkLength, !current.isEmpty {
-                    chunks.append(current)
-                    current = piece
-                } else {
-                    current = current.isEmpty ? piece : current + ", " + piece
-                }
-            }
-            if !current.isEmpty { chunks.append(current) }
-            return chunks
-        }
-
-        var merged: [String] = []
-        for sentence in sentences {
-            if let last = merged.last, last.count < 24 {
-                merged[merged.count - 1] = last + " " + sentence
-            } else {
-                merged.append(sentence)
-            }
-        }
-        return merged
     }
 }

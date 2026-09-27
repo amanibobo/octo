@@ -53,8 +53,11 @@ final class CompanionManager: ObservableObject {
         ? true
         : UserDefaults.standard.bool(forKey: "sounderClipboardFallbackEnabled")
 
-    /// Offline voice: Apple Speech on-device instead of Fireworks Whisper. Persisted.
-    @Published private(set) var isOfflineVoiceEnabled: Bool = UserDefaults.standard.bool(forKey: "sounderOfflineVoiceEnabled")
+    /// On-device transcription (Apple Speech, transcript ready the moment the key is
+    /// released) instead of Fireworks Whisper (cloud upload, 2-10s in testing). Default on. Persisted.
+    @Published private(set) var isOfflineVoiceEnabled: Bool = UserDefaults.standard.object(forKey: "sounderOfflineVoiceEnabled") == nil
+        ? true
+        : UserDefaults.standard.bool(forKey: "sounderOfflineVoiceEnabled")
 
     @Published private(set) var isAnalysisServiceReachable = false
     @Published private(set) var isWorkerReachable = false
@@ -83,6 +86,21 @@ final class CompanionManager: ObservableObject {
     /// The plan of the last Data-mode run, reused when the table is edited and re-run.
     private var lastDataModePlan: DataModePlan?
 
+    /// Everything read off the screen for one interaction.
+    private struct ScreenAnalysis {
+        let capture: SounderScreenCapture
+        let textLines: [RecognizedTextLine]
+        let elements: [ScreenElement]
+        let table: ExtractedTable?
+        let chart: ChartRegion?
+        let captureSeconds: Double
+        let ocrSeconds: Double
+    }
+
+    /// Capture + OCR started the moment the hotkey is released, so it runs while
+    /// the audio is still being transcribed instead of after.
+    private var pendingScreenAnalysisTask: Task<ScreenAnalysis, Error>?
+
     /// The currently running interaction, if any. Cancelled when the user speaks again.
     private var currentResponseTask: Task<Void, Never>?
 
@@ -100,23 +118,32 @@ final class CompanionManager: ObservableObject {
     /// Below this OCR confidence Data mode asks the frontmost app for the table via the clipboard.
     private static let clipboardFallbackConfidenceThreshold = 0.9
     /// In Auto mode a table must reach this confidence before the data planner is consulted.
-    private static let automaticModeTableConfidenceThreshold = 0.45
+    private static let automaticModeTableConfidenceThreshold = 0.6
 
     init() {
         let workerBaseURL = SounderConfiguration.workerBaseURL
         self.chatClient = FireworksChatClient(workerBaseURL: workerBaseURL, model: SounderConfiguration.chatModel)
         self.analysisClient = AnalysisServiceClient(baseURL: SounderConfiguration.analysisServiceBaseURL)
 
-        if SounderConfiguration.speechOutputProvider == "elevenlabs" {
-            self.speechOutput = ElevenLabsTTSClient(proxyURL: "\(workerBaseURL)/tts")
-        } else {
+        switch SounderConfiguration.speechOutputProvider {
+        case "elevenlabs":
+            let elevenLabsClient = ElevenLabsTTSClient(proxyURL: "\(workerBaseURL)/tts")
+            elevenLabsClient.prefetch(DataModePipeline.fillerPhrases)
+            self.speechOutput = elevenLabsClient
+        case "system":
             self.speechOutput = SystemSpeechOutputClient()
+        default:
+            let kokoroClient = KokoroTTSClient(ttsBaseURL: SounderConfiguration.ttsServiceBaseURL)
+            kokoroClient.prefetch(DataModePipeline.fillerPhrases)
+            self.speechOutput = kokoroClient
         }
 
         self.generalModePipeline = GeneralModePipeline(chatClient: chatClient)
         self.dataModePipeline = DataModePipeline(chatClient: chatClient, analysisClient: analysisClient)
 
-        let offlineVoiceEnabled = UserDefaults.standard.bool(forKey: "sounderOfflineVoiceEnabled")
+        let offlineVoiceEnabled = UserDefaults.standard.object(forKey: "sounderOfflineVoiceEnabled") == nil
+            ? true
+            : UserDefaults.standard.bool(forKey: "sounderOfflineVoiceEnabled")
         let transcriptionProvider: any BuddyTranscriptionProvider = offlineVoiceEnabled
             ? AppleSpeechTranscriptionProvider()
             : BuddyTranscriptionProviderFactory.makeDefaultProvider()
@@ -456,6 +483,11 @@ final class CompanionManager: ObservableObject {
             pendingKeyboardShortcutStartTask?.cancel()
             pendingKeyboardShortcutStartTask = nil
             buddyDictationManager.stopPushToTalkFromKeyboardShortcut()
+            // Read the screen now, in parallel with transcription.
+            if buddyDictationManager.isDictationInProgress {
+                pendingScreenAnalysisTask?.cancel()
+                pendingScreenAnalysisTask = makeScreenAnalysisTask()
+            }
         case .none:
             break
         }
@@ -489,24 +521,25 @@ final class CompanionManager: ObservableObject {
         try? await Task.sleep(nanoseconds: 30_000_000)
 
         do {
-            // 1. Capture the display under the cursor at native resolution.
-            let captureStartedAt = Date()
-            let capture = try await NativeScreenCaptureUtility.captureDisplayUnderCursor()
-            report.captureSeconds = Date().timeIntervalSince(captureStartedAt)
+            // 1 + 2. Capture and OCR. Usually already running since the hotkey was
+            // released; a re-run after an edit always reads the screen fresh.
+            let screenAnalysisTask: Task<ScreenAnalysis, Error>
+            if !isRerunAfterEdit, let pendingTask = pendingScreenAnalysisTask {
+                screenAnalysisTask = pendingTask
+            } else {
+                screenAnalysisTask = makeScreenAnalysisTask()
+            }
+            pendingScreenAnalysisTask = nil
+            let screenAnalysis = try await screenAnalysisTask.value
             try Task.checkCancellation()
 
-            // 2. On-device OCR → elements, table, chart.
-            let ocrStartedAt = Date()
-            let cgImage = capture.cgImage
-            let textLines = try await Task.detached(priority: .userInitiated) {
-                try ScreenTextRecognizer.recognizeText(in: cgImage)
-            }.value
-            report.ocrSeconds = Date().timeIntervalSince(ocrStartedAt)
-            try Task.checkCancellation()
-
-            let elements = ScreenElementDetector.makeElements(from: textLines)
-            let extractedTable = TableExtractor.extractTable(from: textLines, imageSize: capture.pixelSize)
-            let chart = ChartRegionDetector.detectChart(in: textLines, imageSize: capture.pixelSize, excluding: extractedTable?.tableBoundingBoxInCapturePixels)
+            let capture = screenAnalysis.capture
+            let textLines = screenAnalysis.textLines
+            let elements = screenAnalysis.elements
+            let extractedTable = screenAnalysis.table
+            let chart = screenAnalysis.chart
+            report.captureSeconds = screenAnalysis.captureSeconds
+            report.ocrSeconds = screenAnalysis.ocrSeconds
 
             if let extractedTable {
                 report.extractionSource = extractedTable.source
@@ -530,7 +563,7 @@ final class CompanionManager: ObservableObject {
                 case .data: return true
                 case .automatic:
                     guard let extractedTable else { return false }
-                    return extractedTable.extractionConfidence >= Self.automaticModeTableConfidenceThreshold
+                    return Self.isPlausibleDataTable(extractedTable)
                 }
             }()
 
@@ -547,7 +580,14 @@ final class CompanionManager: ObservableObject {
                 if isRerunAfterEdit, let previousPlan = lastDataModePlan {
                     plan = previousPlan
                 } else {
-                    plan = await dataModePipeline.plan(transcript: transcript, table: table, hasChart: chart != nil)
+                    // Keyword routing is instant; the language model is consulted only
+                    // when the user forced Data mode and keywords found nothing.
+                    plan = await dataModePipeline.plan(
+                        transcript: transcript,
+                        table: table,
+                        hasChart: chart != nil,
+                        allowLanguageModelFallback: selectedMode == .data
+                    )
                 }
                 report.planSeconds = Date().timeIntervalSince(planStartedAt)
                 try Task.checkCancellation()
@@ -658,6 +698,8 @@ final class CompanionManager: ObservableObject {
         report: inout SounderInteractionReport
     ) async throws {
         report.modeUsed = "General"
+        // Instant (pre-synthesized) so the wait for the vision model is not silent.
+        try? await speechOutput.speakText("let me look")
         let answerStartedAt = Date()
         let answer = try await generalModePipeline.answer(
             transcript: transcript,
@@ -726,6 +768,43 @@ final class CompanionManager: ObservableObject {
             return "the model couldn't run on this table. \(error.localizedDescription)"
         }
         return "something went wrong on my end. try that once more."
+    }
+
+    // MARK: - Screen analysis
+
+    private func makeScreenAnalysisTask() -> Task<ScreenAnalysis, Error> {
+        Task { @MainActor in
+            let captureStartedAt = Date()
+            let capture = try await NativeScreenCaptureUtility.captureDisplayUnderCursor()
+            let captureSeconds = Date().timeIntervalSince(captureStartedAt)
+            try Task.checkCancellation()
+
+            let ocrStartedAt = Date()
+            let cgImage = capture.cgImage
+            let textLines = try await Task.detached(priority: .userInitiated) {
+                try ScreenTextRecognizer.recognizeText(in: cgImage)
+            }.value
+            let ocrSeconds = Date().timeIntervalSince(ocrStartedAt)
+            try Task.checkCancellation()
+
+            let elements = ScreenElementDetector.makeElements(from: textLines)
+            let table = TableExtractor.extractTable(from: textLines, imageSize: capture.pixelSize)
+            let chart = ChartRegionDetector.detectChart(in: textLines, imageSize: capture.pixelSize, excluding: table?.tableBoundingBoxInCapturePixels)
+            return ScreenAnalysis(capture: capture, textLines: textLines, elements: elements, table: table, chart: chart,
+                                  captureSeconds: captureSeconds, ocrSeconds: ocrSeconds)
+        }
+    }
+
+    /// Auto mode only treats a grid as data when it looks like one: enough rows,
+    /// typed columns and real header names. IDE side bars and log panes produce
+    /// "tables" of text otherwise.
+    private static func isPlausibleDataTable(_ table: ExtractedTable) -> Bool {
+        guard table.extractionConfidence >= automaticModeTableConfidenceThreshold,
+              table.rowCount >= 4, table.columnCount >= 2 else { return false }
+        let typedColumnCount = table.columnTypes.filter { $0 == .numeric || $0 == .categorical || $0 == .date }.count
+        guard typedColumnCount >= 2 else { return false }
+        let namedHeaderCount = table.headers.filter { !$0.hasPrefix("Column ") }.count
+        return namedHeaderCount >= max(2, table.columnCount / 2)
     }
 
     // MARK: - Calibration self-test

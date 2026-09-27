@@ -17,9 +17,11 @@
 	<key>SounderChatModel</key>
 	<string>accounts/fireworks/routers/kimi-k3-fast</string>
 	<key>SounderSpeechOutputProvider</key>
-	<string>system</string>
+	<string>elevenlabs</string>
+	<key>SounderTTSBaseURL</key>
+	<string>https://amanibobo1--sounder-tts-kokorospeaker-tts.modal.run</string>
 	<key>SounderUsesLLMNarration</key>
-	<string>true</string>
+	<string>false</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

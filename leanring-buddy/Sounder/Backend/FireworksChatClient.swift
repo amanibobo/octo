@@ -124,9 +124,9 @@ final class FireworksChatClient {
             "messages": messages,
             "max_tokens": maxTokens,
             "temperature": 0.2,
-            // Reasoning models spend tokens thinking before answering; keep that short
-            // so the planner stays inside the latency budget.
-            "reasoning_effort": "low"
+            // Reasoning tokens roughly doubled latency in testing (2.4-4.7s → 1.2s
+            // without). Planning and grounding here are simple enough not to need them.
+            "reasoning_effort": "none"
         ]
         if let model { requestBody["model"] = model }
         if let responseFormat { requestBody["response_format"] = responseFormat }

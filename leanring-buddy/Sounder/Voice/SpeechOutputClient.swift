@@ -19,10 +19,6 @@ protocol SpeechOutputClient: AnyObject {
     func stopPlayback()
 }
 
-extension ElevenLabsTTSClient: SpeechOutputClient {
-    var displayName: String { "ElevenLabs" }
-}
-
 /// On-device speech via AVSpeechSynthesizer. Utterances queue, so a short filler
 /// ("looking...") followed by the real answer plays back to back naturally.
 final class SystemSpeechOutputClient: NSObject, SpeechOutputClient, AVSpeechSynthesizerDelegate {
@@ -73,17 +69,20 @@ final class SystemSpeechOutputClient: NSObject, SpeechOutputClient, AVSpeechSynt
     /// Prefers an installed premium/enhanced US-English voice; falls back to the default.
     /// Slow on first call (voice enumeration), so only ever called off the main thread.
     nonisolated private static func preferredEnglishVoice() -> AVSpeechSynthesisVoice? {
-        let englishVoices = AVSpeechSynthesisVoice.speechVoices().filter { $0.language.hasPrefix("en") }
-        let qualityRank: (AVSpeechSynthesisVoice) -> Int = { voice in
-            switch voice.quality {
-            case .premium: return 3
-            case .enhanced: return 2
-            default: return 1
-            }
+        // macOS ships novelty voices (Flo, Reed, Sandy, Bells...) at the same
+        // "default" quality as the real ones; a plain max() once picked Flo.
+        let noveltyVoiceNames: Set<String> = ["Flo", "Reed", "Sandy", "Shelley", "Grandma", "Grandpa", "Rocko", "Eddy",
+                                              "Bells", "Bubbles", "Bad News", "Boing", "Cellos", "Good News", "Jester",
+                                              "Organ", "Superstar", "Trinoids", "Whisper", "Wobble", "Zarvox", "Albert", "Fred", "Junior", "Kathy", "Ralph"]
+        let englishVoices = AVSpeechSynthesisVoice.speechVoices().filter {
+            $0.language.hasPrefix("en") && !noveltyVoiceNames.contains($0.name)
         }
         let usVoices = englishVoices.filter { $0.language == "en-US" }
         let candidates = usVoices.isEmpty ? englishVoices : usVoices
-        return candidates.max { qualityRank($0) < qualityRank($1) } ?? AVSpeechSynthesisVoice(language: "en-US")
+        if let premium = candidates.first(where: { $0.quality == .premium }) { return premium }
+        if let enhanced = candidates.first(where: { $0.quality == .enhanced }) { return enhanced }
+        if let samantha = candidates.first(where: { $0.name == "Samantha" }) { return samantha }
+        return candidates.first ?? AVSpeechSynthesisVoice(language: "en-US")
     }
 
     // MARK: - AVSpeechSynthesizerDelegate

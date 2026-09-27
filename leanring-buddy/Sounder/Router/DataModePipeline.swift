@@ -73,7 +73,17 @@ final class DataModePipeline {
         "required": ["task", "target_col", "group_col", "k", "x_col", "y_col", "filler"]
     ]
 
-    func plan(transcript: String, table: ExtractedTable, hasChart: Bool) async -> DataModePlan {
+    /// Fixed filler phrases so the speech client can synthesize them once at launch.
+    static let fillerPhrases = ["looking for outliers", "training a model", "fitting a curve", "let me look"]
+
+    /// Keyword routing first (no network, ~0ms). The language model is only asked
+    /// when keywords find nothing and the caller allows it (forced Data mode).
+    func plan(transcript: String, table: ExtractedTable, hasChart: Bool, allowLanguageModelFallback: Bool) async -> DataModePlan {
+        let keywordPlan = Self.localPlan(transcript: transcript, table: table)
+        if keywordPlan.task != nil || !allowLanguageModelFallback {
+            return keywordPlan
+        }
+
         let columnDescriptions = zip(table.headers, table.columnTypes).map { "\($0) (\($1.rawValue))" }.joined(separator: ", ")
         let userText = """
         columns: \(columnDescriptions)
@@ -138,10 +148,10 @@ final class DataModePipeline {
         if containsAny(["drive", "driver", "predict", "explain", "cause", "important", "matter", "why", "influenc", "factor"]) {
             let target = mentionedColumns.first ?? table.headers.last
             return DataModePlan(task: .drivers, targetColumn: target, groupColumn: nil, topK: 6, xColumn: nil, yColumn: nil,
-                                fillerText: "training on \(target ?? "the table")", plannerSource: "keywords")
+                                fillerText: "training a model", plannerSource: "keywords")
         }
         return DataModePlan(task: nil, targetColumn: nil, groupColumn: nil, topK: 6, xColumn: nil, yColumn: nil,
-                            fillerText: "looking", plannerSource: "keywords")
+                            fillerText: "let me look", plannerSource: "keywords")
     }
 
     private func resolvedColumnName(_ requestedName: String?, in table: ExtractedTable) -> String? {

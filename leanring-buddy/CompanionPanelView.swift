@@ -477,8 +477,8 @@ struct CompanionPanelView: View {
             )
 
             toggleRow(
-                label: "Offline voice",
-                subtitle: "Apple Speech instead of Fireworks Whisper",
+                label: "On-device transcription",
+                subtitle: "Apple Speech, instant. Off = Fireworks Whisper (cloud)",
                 iconName: "wifi.slash",
                 isOn: companionManager.isOfflineVoiceEnabled,
                 onChange: { companionManager.setOfflineVoiceEnabled($0) }

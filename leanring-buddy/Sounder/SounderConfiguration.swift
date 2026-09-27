@@ -27,14 +27,20 @@ enum SounderConfiguration {
         AppBundleConfiguration.stringValue(forKey: "SounderChatModel")
     }
 
-    /// "system" (AVSpeechSynthesizer, no network) or "elevenlabs" (via Worker /tts).
+    /// "kokoro" (neural voice on Modal), "elevenlabs" (via Worker /tts) or "system" (AVSpeechSynthesizer, offline).
     static var speechOutputProvider: String {
-        AppBundleConfiguration.stringValue(forKey: "SounderSpeechOutputProvider")?.lowercased() ?? "system"
+        AppBundleConfiguration.stringValue(forKey: "SounderSpeechOutputProvider")?.lowercased() ?? "elevenlabs"
     }
 
     /// Whether the LLM rewrites the deterministic result sentences for speech.
     /// The numbers always come from the analysis service; the LLM only rephrases.
     static var usesLLMNarration: Bool {
-        (AppBundleConfiguration.stringValue(forKey: "SounderUsesLLMNarration") ?? "true").lowercased() != "false"
+        (AppBundleConfiguration.stringValue(forKey: "SounderUsesLLMNarration") ?? "false").lowercased() == "true"
+    }
+
+    /// Base URL of the Kokoro text-to-speech service (Modal). Used when the speech
+    /// output provider is "kokoro".
+    static var ttsServiceBaseURL: String {
+        AppBundleConfiguration.stringValue(forKey: "SounderTTSBaseURL") ?? "https://amanibobo1--sounder-tts-kokorospeaker-tts.modal.run"
     }
 }
