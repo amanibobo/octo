@@ -1,0 +1,13 @@
+# Sounder analysis service — runs locally with uvicorn or on Modal (see modal_app.py).
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.7
+numpy>=2.0
+pandas>=2.2
+scikit-learn>=1.5
+scipy>=1.13
+httpx>=0.27
+pytest>=8.0
+# Optional accelerators. Both are imported lazily and fall back to scikit-learn.
+# lightgbm>=4.5        # needs `brew install libomp` on macOS
+# tabpfn>=2.0          # downloads model weights on first use; set SOUNDER_USE_TABPFN=1

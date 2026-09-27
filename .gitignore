@@ -1,0 +1,15 @@
+worker/node_modules/
+worker/.dev.vars
+.DS_Store
+*.xcuserstate
+build/
+releases/
+.claude/
+coding-plans/
+services/.venv/
+services/**/__pycache__/
+services/.pytest_cache/
+services/synth/output/
+services/extractor/runs/
+worker/.wrangler/
+leanring-buddy.xcodeproj/xcuserdata/

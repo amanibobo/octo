@@ -1,0 +1,222 @@
+# Sounder - Agent Instructions
+
+<!-- This is the single source of truth for all AI coding agents. CLAUDE.md is a symlink to this file. -->
+<!-- AGENTS.md spec: https://github.com/agentsmd/agents.md — supported by Claude Code, Cursor, Copilot, Gemini CLI, and others. -->
+
+## Overview
+
+macOS menu bar companion app (fork of Clicky, MIT). Lives entirely in the macOS status bar (no dock icon, no main window). Push-to-talk (ctrl+option) captures the display under the cursor at native resolution, runs **on-device Vision OCR**, rebuilds any spreadsheet table from the word boxes, and routes the spoken question:
+
+- **Data mode**: a JSON-schema planner (Fireworks LLM, sees column names only) picks `anomaly` / `drivers` / `fit`; the Python analysis service (`services/analysis`) trains/fits a model and returns row ids, importances or curve points; the overlay draws circles around rows, importance bars under headers, or a curve over the user's chart; the result is spoken from the numbers.
+- **General mode**: Set-of-Mark screenshot + element list → Fireworks vision model returns an element **ID** to point at (never coordinates); the blue cursor flies there.
+
+Voice: Fireworks Whisper (`whisper-v3-turbo`) for speech-to-text, `AVSpeechSynthesizer` for speech out by default (ElevenLabs optional). All API keys live on a Cloudflare Worker proxy — nothing sensitive ships in the app. The Fireworks key for local dev lives in `worker/.dev.vars` (gitignored).
+
+## Architecture
+
+- **App Type**: Menu bar-only (`LSUIElement=true`), no dock icon or main window
+- **Framework**: SwiftUI (macOS native) with AppKit bridging for menu bar panel and cursor overlay
+- **Pattern**: MVVM with `@StateObject` / `@Published` state management
+- **LLM**: Fireworks (default `accounts/fireworks/routers/kimi-k3-fast`: image input + JSON-schema output, ~1.3 s) via Worker `/chat`, OpenAI-compatible body. Planner and General-mode answers are JSON-schema constrained.
+- **Speech-to-Text**: Fireworks Whisper via Worker `/transcribe` (upload WAV on key-up). Apple Speech as the offline fallback (panel toggle). AssemblyAI/OpenAI providers kept but unused by default.
+- **Text-to-Speech**: `AVSpeechSynthesizer` (`SystemSpeechOutputClient`, offline) by default; ElevenLabs via Worker `/tts` when `SounderSpeechOutputProvider=elevenlabs`.
+- **Screen Capture**: ScreenCaptureKit at native (Retina) resolution of the display under the cursor; own windows excluded so drawings never feed back into OCR.
+- **OCR / grounding**: Apple Vision `VNRecognizeTextRequest` (accurate, no language correction). `InkSegmenter` re-splits each OCR line at real ink gaps in the bitmap because Vision's word boxes are padded. Elements get sequential IDs (Set-of-Mark).
+- **Table extraction**: `TableExtractor` (rows by y-clustering → longest evenly pitched run → column separators from the x-coverage profile → header/gutter detection → column typing → confidence). Clipboard fallback (⌘A/⌘C TSV, aligned to OCR rows) when confidence < 0.9.
+- **Analysis**: Python FastAPI (`services/analysis`): IsolationForest + robust-z reasons, HistGradientBoosting + permutation importance with held-out AUC/R², AIC-selected curve fit. Optional TabPFN. Deployable to Modal (`services/modal_app.py`).
+- **Drawing**: `DrawingPrimitive` list rendered by `DrawingLayerView` inside every overlay window. All geometry in capture pixels; `CaptureGeometry` scales to overlay points.
+- **Element Pointing**: element ID → bbox centre → `detectedElementScreenLocation` (global AppKit coords); the blue cursor animates along a bezier arc as in Clicky.
+- **Edit-and-re-run**: `ScreenChangeWatcher` samples the table region for ~12 s after a Data result and re-runs the same plan once pixels change and settle.
+- **Concurrency**: `@MainActor` default isolation (`SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`), async/await; CPU-heavy OCR/extraction code is `nonisolated` and runs in detached tasks.
+- **Analytics**: PostHog via `ClickyAnalytics.swift`, **disabled unless `PostHogAPIKey` is in Info.plist**.
+
+### API Proxy (Cloudflare Worker)
+
+The app never calls external APIs directly. All requests go through a Cloudflare Worker (`worker/src/index.ts`) that holds the real API keys as secrets.
+
+| Route | Upstream | Purpose |
+|-------|----------|---------|
+| `GET /health` | — | Which upstreams are configured |
+| `POST /chat` | `api.fireworks.ai/inference/v1/chat/completions` | OpenAI-compatible chat (vision, JSON schema, streaming passthrough); default model injected |
+| `POST /transcribe` | `audio-turbo.us-virginia-1.direct.fireworks.ai/v1/audio/transcriptions` | Whisper (`whisper-v3-turbo`), multipart passthrough. Note: this host wants the raw key, no `Bearer` |
+| `POST /tts` | `api.elevenlabs.io/v1/text-to-speech/{voiceId}` | Optional ElevenLabs TTS (503 without key) |
+| `POST /transcribe-token` | `streaming.assemblyai.com/v3/token` | Optional legacy AssemblyAI token (503 without key) |
+| `ANY /analysis/*` | `ANALYSIS_BACKEND_URL` | Optional passthrough to the deployed analysis service |
+
+Worker secrets: `FIREWORKS_API_KEY` (required), `ELEVENLABS_API_KEY`, `ASSEMBLYAI_API_KEY` (optional)
+Worker vars: `FIREWORKS_CHAT_MODEL`, `FIREWORKS_TRANSCRIPTION_MODEL`, `ELEVENLABS_VOICE_ID`, `ANALYSIS_BACKEND_URL`
+
+### Key Architecture Decisions
+
+**Menu Bar Panel Pattern**: The companion panel uses `NSStatusItem` for the menu bar icon and a custom borderless `NSPanel` for the floating control panel. This gives full control over appearance (dark, rounded corners, custom shadow) and avoids the standard macOS menu/popover chrome. The panel is non-activating so it doesn't steal focus. A global event monitor auto-dismisses it on outside clicks.
+
+**Cursor Overlay**: A full-screen transparent `NSPanel` hosts the blue cursor companion. It's non-activating, joins all Spaces, and never steals focus. The cursor position, response text, waveform, and pointing animations all render in this overlay via SwiftUI through `NSHostingView`.
+
+**Global Push-To-Talk Shortcut**: Background push-to-talk uses a listen-only `CGEvent` tap instead of an AppKit global monitor so modifier-based shortcuts like `ctrl + option` are detected more reliably while the app is running in the background.
+
+**Shared URLSession for AssemblyAI**: A single long-lived `URLSession` is shared across all AssemblyAI streaming sessions (owned by the provider, not the session). Creating and invalidating a URLSession per session corrupts the OS connection pool and causes "Socket is not connected" errors after a few rapid reconnections.
+
+**Transient Cursor Mode**: When "Show Sounder" is off, pressing the hotkey fades in the cursor overlay for the duration of the interaction (recording → response → TTS → optional pointing), then fades it out automatically after 1 second of inactivity.
+
+**Coordinate Contract**: Every box from OCR/extraction/analysis is in capture pixels (top-left origin of the captured display image). `CaptureGeometry` converts to overlay points (`pixel × displayPoints / capturePixels`) and to global AppKit coordinates for cursor pointing. The panel's "Calibrate overlay" outlines every OCR line for 5 s as a visual self-test.
+
+**Grounding by ID**: The LLM never emits pixel coordinates. It receives numbered elements (Set-of-Mark) and returns IDs; Data-mode drawings are built from analysis results (row indices / column names), never from prose.
+
+**Planner sees no data**: The Data-mode planner prompt contains column names, types and the row count only. Spoken numbers are produced by the analysis service; the LLM may rephrase and the app rejects a rephrase that drops any number.
+
+**OCR warm-up**: Vision loads its text models on the first request (~7 s). `ScreenTextRecognizer.warmUp()` runs at launch so the first hotkey costs ~0.4 s.
+
+**Vision word boxes are padded**: `VNRecognizedText.boundingBox(for:)` returns boxes padded to roughly the line height, collapsing real 16 px cell gaps to ~3 px. `InkSegmenter` re-splits lines using a luminance projection profile; cell gaps are ≥ 0.36 × line height, spaces are not. Thin 2 px segments (a "1") must be kept.
+
+## Key Files
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `leanring_buddyApp.swift` | ~89 | Menu bar app entry point. `CompanionAppDelegate` creates `MenuBarPanelManager` and starts `CompanionManager`. |
+| `CompanionManager.swift` | ~720 | State machine and **mode router**. Owns dictation, shortcut monitor, overlay, drawing layer, speech output, both pipelines, service health polling, the calibration self-test and the edit-and-re-run watcher. `performInteraction` = capture → OCR → table/chart → route → draw → speak. |
+| `MenuBarPanelManager.swift` | ~243 | NSStatusItem + custom NSPanel lifecycle. |
+| `CompanionPanelView.swift` | ~560 | Panel UI: permissions, Start, mode picker (Auto/General/Data), service status, last-run latency/confidence readout, options (clipboard fallback, offline voice, show cursor, calibrate). |
+| `OverlayWindow.swift` | ~780 | Full-screen transparent overlay hosting the blue cursor and `DrawingLayerView`. Cursor animation, bezier pointing, multi-monitor. |
+| `Sounder/SounderConfiguration.swift` | ~40 | Info.plist-backed config: Worker URL, analysis URL, chat model, speech provider, LLM narration flag. |
+| `Sounder/SounderMode.swift` | ~35 | `automatic` / `general` / `data` with display copy. |
+| `Sounder/Backend/SounderModels.swift` | ~300 | `CaptureGeometry`, `ScreenElement`, `ExtractedTable`, `ChartRegion`/`AxisCalibration`, analysis response Codables (snake_case mirror of `services/analysis/schemas.py`), `SounderInteractionReport`. |
+| `Sounder/Backend/FireworksChatClient.swift` | ~190 | OpenAI-compatible chat via Worker `/chat`: images as data URLs, JSON-schema `response_format`, `reasoning_effort: low`, prior turns. |
+| `Sounder/Backend/AnalysisServiceClient.swift` | ~100 | `/health`, `/analyze`. |
+| `Sounder/Capture/NativeScreenCaptureUtility.swift` | ~140 | Native-resolution capture of the display under the cursor; region thumbnails for the change watcher; downscaled JPEG for the VLM. |
+| `Sounder/Grounding/ScreenElementDetector.swift` | ~330 | `ScreenTextRecognizer` (Vision OCR → lines/words in capture px, warm-up), `GrayscaleBitmap`, `InkSegmenter`, `ScreenElementDetector.makeElements`. |
+| `Sounder/Grounding/SetOfMarkRenderer.swift` | ~100 | Numbered red tags drawn on a downscaled screenshot for the vision model. |
+| `Sounder/Extraction/TableExtractor.swift` | ~330 | OCR words → `ExtractedTable` (rows, columns, header, gutter row labels, types, confidence, cell boxes). `CellValueParser`, `TableColumnTyping`. |
+| `Sounder/Extraction/ChartRegionDetector.swift` | ~150 | Numeric tick labels → plot bbox + linear axis calibrations. `SOUNDER_DEBUG_CHART=1` traces. |
+| `Sounder/Extraction/ClipboardTableExtractor.swift` | ~230 | ⌘A/⌘C via CGEvent, TSV/CSV parse, merge clipboard rows with OCR geometry. |
+| `Sounder/Extraction/ScreenChangeWatcher.swift` | ~120 | Region thumbnail diffing; fires once after a change settles. |
+| `Sounder/Overlay/DrawingPrimitives.swift` | ~150 | `DrawingPrimitive` enum + `DrawingOpsBuilder` (`circleRows`, `barsUnderHeaders`, `curve`, `highlightCells`, `highlightElements`, `calibrationOutlines`). |
+| `Sounder/Overlay/DrawingLayerView.swift` | ~200 | `DrawingLayerModel` (show/clear/auto-clear) + SwiftUI renderer, capture px → overlay points. |
+| `Sounder/Router/GeneralModePipeline.swift` | ~110 | Set-of-Mark vision answer `{speak, point_element_id, point_label, highlight_element_ids}`. |
+| `Sounder/Router/DataModePipeline.swift` | ~260 | Planner (LLM JSON + keyword fallback), analysis call, drawing primitives, templated speech + verified LLM rephrase. |
+| `Sounder/Voice/FireworksAudioTranscriptionProvider.swift` | ~210 | Upload-based `BuddyTranscriptionProvider` for Fireworks Whisper via Worker `/transcribe`. |
+| `Sounder/Voice/SpeechOutputClient.swift` | ~100 | `SpeechOutputClient` protocol, `SystemSpeechOutputClient` (AVSpeechSynthesizer), ElevenLabs conformance. |
+| `Sounder/Voice/MultipartFormDataBuilder.swift` | ~45 | Multipart encoder for audio uploads. |
+| `BuddyDictationManager.swift` | ~890 | Push-to-talk voice pipeline (AVAudioEngine, permissions, transcript finalization). Provider is injectable/replaceable (`replaceTranscriptionProvider`). |
+| `BuddyTranscriptionProvider.swift` | ~110 | Provider protocol + factory (`fireworks` default, `apple`, `assemblyai`, `openai`). |
+| `AssemblyAIStreamingTranscriptionProvider.swift` | ~478 | Legacy streaming provider (token URL from `SounderConfiguration`). |
+| `OpenAIAudioTranscriptionProvider.swift` | ~317 | Legacy upload provider. |
+| `AppleSpeechTranscriptionProvider.swift` | ~147 | Offline fallback provider. |
+| `BuddyAudioConversionSupport.swift` | ~108 | PCM16 conversion + WAV builder. |
+| `GlobalPushToTalkShortcutMonitor.swift` | ~132 | Listen-only CGEvent tap for ctrl+option. |
+| `ElevenLabsTTSClient.swift` | ~81 | Optional TTS via Worker `/tts`. |
+| `CompanionScreenCaptureUtility.swift` | ~132 | Legacy multi-monitor downscaled capture (unused by the Sounder pipeline). |
+| `CompanionResponseOverlay.swift` | ~217 | Legacy response bubble (unused). |
+| `DesignSystem.swift` | ~880 | `DS.Colors`, `DS.CornerRadius`, button styles. |
+| `ClickyAnalytics.swift` | ~140 | PostHog wrapper, opt-in via `PostHogAPIKey`. |
+| `WindowPositionManager.swift` | ~262 | Permission helpers. |
+| `AppBundleConfiguration.swift` | ~28 | Info.plist reader. |
+| `worker/src/index.ts` | ~260 | Cloudflare Worker proxy (routes above). |
+| `services/analysis/*.py` | ~600 | FastAPI analysis service (`app.py`, `schemas.py`, `table_frame.py`, `anomaly.py`, `drivers.py`, `curve_fit.py`, `narration.py`). Tests in `services/tests`. |
+| `services/modal_app.py` | ~30 | Modal deployment of the analysis service. |
+| `services/synth/generate_synthetic_tables.py` | ~170 | Playwright synthetic spreadsheet renderer → COCO boxes (extractor training data). |
+| `services/extractor/train.py`, `serve.py` | ~250 | RF-DETR fine-tune and `/extract` service scaffolds (untested, need GPU/weights). |
+
+## Build & Run
+
+```bash
+# Open in Xcode
+open leanring-buddy.xcodeproj
+
+# Select the leanring-buddy scheme, set signing team, Cmd+R to build and run
+
+# Known non-blocking warnings: Swift 6 concurrency warnings,
+# deprecated onChange warning in OverlayWindow.swift. Do NOT attempt to fix these.
+```
+
+**Do NOT run `xcodebuild` from the terminal** — it invalidates TCC (Transparency, Consent, and Control) permissions and the app will need to re-request screen recording, accessibility, etc.
+
+## Cloudflare Worker
+
+```bash
+cd worker
+npm install
+
+# Local dev: put FIREWORKS_API_KEY=fw_... in worker/.dev.vars (gitignored), then
+npx wrangler dev --port 8787
+
+# Deploy
+npx wrangler secret put FIREWORKS_API_KEY
+npx wrangler deploy      # then set SounderWorkerBaseURL in Info.plist
+```
+
+## Analysis service (Python)
+
+```bash
+cd services
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/uvicorn analysis.app:app --port 8000
+.venv/bin/python -m pytest -q tests          # 5 tests: health, anomaly, drivers, fit, 422
+```
+
+## Typechecking without Xcode
+
+`xcodebuild` is off-limits (TCC), but the sources can be typechecked with `swiftc -typecheck` using stub modules for PostHog and Sparkle and the project's flags (`-swift-version 5 -default-isolation MainActor -enable-upcoming-feature MemberImportVisibility ...`). Copy the sources to a temp folder first: this repo lives under `~/Documents`, and iCloud touches file mtimes mid-compile ("input file was modified during the build").
+
+## Extraction harness
+
+A standalone harness (render a synthetic Sheets screenshot with AppKit → `ScreenTextRecognizer` → `TableExtractor` → `ChartRegionDetector` → clipboard merge) compiles `Sounder/Backend/SounderModels.swift`, `Sounder/Grounding/ScreenElementDetector.swift`, `Sounder/Extraction/*.swift` and `Sounder/Capture/NativeScreenCaptureUtility.swift` with a `main.swift`. Last measured: 26×8 table, 8/8 headers, ~90% cell accuracy, chart axes within 2 px.
+
+## Code Style & Conventions
+
+### Variable and Method Naming
+
+IMPORTANT: Follow these naming rules strictly. Clarity is the top priority.
+
+- Be as clear and specific with variable and method names as possible
+- **Optimize for clarity over concision.** A developer with zero context on the codebase should immediately understand what a variable or method does just from reading its name
+- Use longer names when it improves clarity. Do NOT use single-character variable names
+- Example: use `originalQuestionLastAnsweredDate` instead of `originalAnswered`
+- When passing props or arguments to functions, keep the same names as the original variable. Do not shorten or abbreviate parameter names. If you have `currentCardData`, pass it as `currentCardData`, not `card` or `cardData`
+
+### Code Clarity
+
+- **Clear is better than clever.** Do not write functionality in fewer lines if it makes the code harder to understand
+- Write more lines of code if additional lines improve readability and comprehension
+- Make things so clear that someone with zero context would completely understand the variable names, method names, what things do, and why they exist
+- When a variable or method name alone cannot fully explain something, add a comment explaining what is happening and why
+
+### Swift/SwiftUI Conventions
+
+- Use SwiftUI for all UI unless a feature is only supported in AppKit (e.g., `NSPanel` for floating windows)
+- All UI state updates must be on `@MainActor`
+- Use async/await for all asynchronous operations
+- Comments should explain "why" not just "what", especially for non-obvious AppKit bridging
+- AppKit `NSPanel`/`NSWindow` bridged into SwiftUI via `NSHostingView`
+- All buttons must show a pointer cursor on hover
+- For any interactive element, explicitly think through its hover behavior (cursor, visual feedback, and whether hover should communicate clickability)
+
+### Do NOT
+
+- Do not add features, refactor code, or make "improvements" beyond what was asked
+- Do not add docstrings, comments, or type annotations to code you did not change
+- Do not try to fix the known non-blocking warnings (Swift 6 concurrency, deprecated onChange)
+- Do not rename the project directory or scheme (the "leanring" typo is intentional/legacy)
+- Do not run `xcodebuild` from the terminal — it invalidates TCC permissions
+- Do not let the LLM emit pixel coordinates or invent numbers: grounding is by element ID, spoken statistics come from the analysis service
+- Do not commit `worker/.dev.vars` or any API key
+
+## Git Workflow
+
+- Branch naming: `feature/description` or `fix/description`
+- Commit messages: imperative mood, concise, explain the "why" not the "what"
+- Do not force-push to main
+
+## Self-Update Instructions
+
+<!-- AI agents: follow these instructions to keep this file accurate. -->
+
+When you make changes to this project that affect the information in this file, update this file to reflect those changes. Specifically:
+
+1. **New files**: Add new source files to the "Key Files" table with their purpose and approximate line count
+2. **Deleted files**: Remove entries for files that no longer exist
+3. **Architecture changes**: Update the architecture section if you introduce new patterns, frameworks, or significant structural changes
+4. **Build changes**: Update build commands if the build process changes
+5. **New conventions**: If the user establishes a new coding convention during a session, add it to the appropriate conventions section
+6. **Line count drift**: If a file's line count changes significantly (>50 lines), update the approximate count in the Key Files table
+
+Do NOT update this file for minor edits, bug fixes, or changes that don't affect the documented architecture or conventions.

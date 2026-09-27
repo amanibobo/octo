@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>LSUIElement</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/julianjear/makesomething-mac-app/main/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>/l3d2rw5ZZFRU3AadP/w2Zf8FHfhA6bKv16BQOV5OSk=</string>
+	<key>VoiceTranscriptionProvider</key>
+	<string>fireworks</string>
+	<key>SounderWorkerBaseURL</key>
+	<string>http://127.0.0.1:8787</string>
+	<key>SounderAnalysisBaseURL</key>
+	<string>http://127.0.0.1:8000</string>
+	<key>SounderChatModel</key>
+	<string>accounts/fireworks/routers/kimi-k3-fast</string>
+	<key>SounderSpeechOutputProvider</key>
+	<string>system</string>
+	<key>SounderUsesLLMNarration</key>
+	<string>true</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Sounder uses your microphone so you can ask questions about what is on your screen</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>Sounder needs screen recording access to read the table on your screen when you press the hotkey.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Sounder uses on-device speech recognition when offline voice is enabled</string>
+</dict>
+</plist>

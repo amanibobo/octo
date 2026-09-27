@@ -1,0 +1,14 @@
+name = "sounder-proxy"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+[vars]
+# Fireworks model used for planning, narration and Set-of-Mark vision grounding.
+# Must support image input + JSON-schema output. kimi-k3-fast measured ~1.3s per call.
+FIREWORKS_CHAT_MODEL = "accounts/fireworks/routers/kimi-k3-fast"
+FIREWORKS_TRANSCRIPTION_MODEL = "whisper-v3-turbo"
+# Optional ElevenLabs voice (only used when ELEVENLABS_API_KEY secret is set).
+ELEVENLABS_VOICE_ID = "kPzsL2i3teMYv0FxEYQ6"
+# Optional: URL of the deployed Python analysis service (Modal). When set, the
+# Worker proxies /analysis/* to it. Leave empty when the app talks to a local backend.
+ANALYSIS_BACKEND_URL = ""
