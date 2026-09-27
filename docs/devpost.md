@@ -10,6 +10,10 @@ We wanted something different: a buddy that lives on your Mac, looks at what you
 
 That's Octo.
 
+We're submitting Octo to the **Oracle of the Deep** track. The whole product is a pipeline of models that sees what a person cannot take in at once: on-device text recognition, a biomedical named-entity model we fine-tuned during the hackathon, a rules engine for interactions and renal dosing, and a vision-grounded language model that points at what it is talking about. The output is not a report. It is drawn directly on the data it came from.
+
+It also fits the **Impiricus** challenge to invent the next way to engage healthcare professionals. Octo is an engagement channel that lives where clinicians already work, inside the chart, at the moment of a decision. When it surfaces evidence for a condition, it can carry a clearly labeled, opt-in sponsored medical information card alongside the independent trials, so a manufacturer's dosing update or new indication reaches the prescriber in context, with the patient's data never leaving the machine. No SMS, no portal, no interruption.
+
 ## What it does
 
 Octo lives in the MacBook notch. Hover over it and a small card unfolds. Hold `ctrl + option` anywhere and talk. When you let go, Octo reads the screen, answers by voice, and draws on top of whatever app you are in.
