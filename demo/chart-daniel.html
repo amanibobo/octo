@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Patient Chart — Daniel Reyes</title>
+<style>
+  :root { --ink:#1b1f24; --muted:#5b6470; --line:#d9dee5; --bg:#f6f8fa; }
+  body { margin:0; background:var(--bg); color:var(--ink); font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; font-size:14px; }
+  header { background:#12385c; color:#fff; padding:10px 20px; display:flex; justify-content:space-between; align-items:center; }
+  header .name { font-size:18px; font-weight:600; }
+  header .meta { font-size:12px; opacity:.85; }
+  main { display:grid; grid-template-columns: 1.1fr 1fr; gap:18px; padding:18px 20px; max-width:1180px; }
+  section { background:#fff; border:1px solid var(--line); border-radius:8px; padding:14px 16px; }
+  h2 { font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin:0 0 10px; }
+  table { border-collapse:collapse; width:100%; }
+  th { text-align:left; font-size:11px; color:var(--muted); font-weight:600; padding:4px 6px; border-bottom:1px solid var(--line); }
+  td { padding:7px 6px; border-bottom:1px solid #eef1f4; vertical-align:top; }
+  td[contenteditable] { outline:none; }
+  td[contenteditable]:focus { background:#fff8e1; }
+  .hint { font-size:11px; color:var(--muted); margin-top:8px; }
+  ul { margin:0; padding-left:18px; }
+  li { padding:3px 0; }
+  .labs td:nth-child(2) { font-variant-numeric: tabular-nums; }
+  .flag { color:#b3261e; font-weight:600; }
+  .note { line-height:1.5; }
+</style>
+</head>
+<body>
+<header>
+  <div class="name">Daniel Reyes &nbsp;<span class="meta">MRN 60217735 · DOB 11/19/1967 · 58 y · Male</span></div>
+  <div class="meta">Synthetic patient (Synthea-style). Not a real person.</div>
+</header>
+<main>
+  <section>
+    <h2>Active Medications</h2>
+    <table id="meds">
+      <thead><tr><th>Medication</th><th>Dose</th><th>Route / Frequency</th><th>Indication</th></tr></thead>
+      <tbody>
+        <tr><td contenteditable>Simvastatin</td><td contenteditable>80 mg</td><td contenteditable>PO nightly</td><td>Hyperlipidemia</td></tr>
+        <tr><td contenteditable>Amlodipine</td><td contenteditable>10 mg</td><td contenteditable>PO daily</td><td>Hypertension</td></tr>
+        <tr><td contenteditable>Clarithromycin</td><td contenteditable>500 mg</td><td contenteditable>PO BID</td><td>Community-acquired pneumonia (new)</td></tr>
+        <tr><td contenteditable>Digoxin</td><td contenteditable>0.25 mg</td><td contenteditable>PO daily</td><td>Atrial fibrillation</td></tr>
+        <tr><td contenteditable>Amiodarone</td><td contenteditable>200 mg</td><td contenteditable>PO daily</td><td>Atrial fibrillation</td></tr>
+        <tr><td contenteditable>Apixaban</td><td contenteditable>5 mg</td><td contenteditable>PO BID</td><td>Atrial fibrillation</td></tr>
+        <tr><td contenteditable>Aspirin</td><td contenteditable>81 mg</td><td contenteditable>PO daily</td><td>Coronary artery disease</td></tr>
+        <tr><td contenteditable>Isosorbide mononitrate</td><td contenteditable>30 mg</td><td contenteditable>PO daily</td><td>Stable angina</td></tr>
+        <tr><td contenteditable>Sildenafil</td><td contenteditable>50 mg</td><td contenteditable>PO PRN</td><td>Erectile dysfunction</td></tr>
+        <tr><td contenteditable></td><td contenteditable></td><td contenteditable></td><td></td></tr>
+      </tbody>
+    </table>
+    <div class="hint">Cells are editable: add a drug to the empty row and ask again.</div>
+  </section>
+
+  <section>
+    <h2>Problem List</h2>
+    <ul>
+      <li>Coronary artery disease (I25.10)</li>
+      <li>Stable angina (I20.9)</li>
+      <li>Atrial fibrillation, paroxysmal (I48.0)</li>
+      <li>Essential hypertension (I10)</li>
+      <li>Hyperlipidemia (E78.5)</li>
+      <li>Community-acquired pneumonia (J18.9)</li>
+      <li>Erectile dysfunction (N52.9)</li>
+    </ul>
+    <h2 style="margin-top:16px">Recent Labs (09/24/2026)</h2>
+    <table class="labs">
+      <thead><tr><th>Test</th><th>Result</th><th>Reference</th></tr></thead>
+      <tbody>
+        <tr><td>Creatinine</td><td>1.0 mg/dL</td><td>0.7 – 1.3</td></tr>
+        <tr><td>eGFR</td><td>84 mL/min/1.73m²</td><td>> 60</td></tr>
+        <tr><td>Potassium</td><td>4.0 mmol/L</td><td>3.5 – 5.1</td></tr>
+        <tr><td>LDL cholesterol</td><td class="flag">131 mg/dL</td><td>< 70 (goal)</td></tr>
+        <tr><td>Digoxin level</td><td class="flag">1.4 ng/mL</td><td>0.5 – 0.9</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section style="grid-column: 1 / -1">
+    <h2>Assessment &amp; Plan (09/25/2026)</h2>
+    <p class="note">58-year-old man with coronary artery disease, stable angina, paroxysmal atrial fibrillation on amiodarone, digoxin and apixaban. Presented with community-acquired pneumonia; clarithromycin started today. LDL remains above goal on high-intensity simvastatin. Follow-up in 1 week.</p>
+  </section>
+</main>
+</body>
+</html>

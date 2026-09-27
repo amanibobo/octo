@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Patient Chart — Margaret Okafor</title>
+<style>
+  :root { --ink:#1b1f24; --muted:#5b6470; --line:#d9dee5; --bg:#f6f8fa; }
+  body { margin:0; background:var(--bg); color:var(--ink); font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; font-size:14px; }
+  header { background:#12385c; color:#fff; padding:10px 20px; display:flex; justify-content:space-between; align-items:center; }
+  header .name { font-size:18px; font-weight:600; }
+  header .meta { font-size:12px; opacity:.85; }
+  main { display:grid; grid-template-columns: 1.1fr 1fr; gap:18px; padding:18px 20px; max-width:1180px; }
+  section { background:#fff; border:1px solid var(--line); border-radius:8px; padding:14px 16px; }
+  h2 { font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin:0 0 10px; }
+  table { border-collapse:collapse; width:100%; }
+  th { text-align:left; font-size:11px; color:var(--muted); font-weight:600; padding:4px 6px; border-bottom:1px solid var(--line); }
+  td { padding:7px 6px; border-bottom:1px solid #eef1f4; vertical-align:top; }
+  td[contenteditable] { outline:none; }
+  td[contenteditable]:focus { background:#fff8e1; }
+  .hint { font-size:11px; color:var(--muted); margin-top:8px; }
+  ul { margin:0; padding-left:18px; }
+  li { padding:3px 0; }
+  .labs td:nth-child(2) { font-variant-numeric: tabular-nums; }
+  .flag { color:#b3261e; font-weight:600; }
+  .note { line-height:1.5; }
+</style>
+</head>
+<body>
+<header>
+  <div class="name">Margaret Okafor &nbsp;<span class="meta">MRN 51930442 · DOB 06/02/1944 · 82 y · Female</span></div>
+  <div class="meta">Synthetic patient (Synthea-style). Not a real person.</div>
+</header>
+<main>
+  <section>
+    <h2>Active Medications</h2>
+    <table id="meds">
+      <thead><tr><th>Medication</th><th>Dose</th><th>Route / Frequency</th><th>Indication</th></tr></thead>
+      <tbody>
+        <tr><td contenteditable>Citalopram</td><td contenteditable>40 mg</td><td contenteditable>PO daily</td><td>Major depressive disorder</td></tr>
+        <tr><td contenteditable>Zolpidem</td><td contenteditable>10 mg</td><td contenteditable>PO nightly</td><td>Insomnia</td></tr>
+        <tr><td contenteditable>Tramadol</td><td contenteditable>100 mg</td><td contenteditable>PO QID</td><td>Chronic low back pain</td></tr>
+        <tr><td contenteditable>Gabapentin</td><td contenteditable>600 mg</td><td contenteditable>PO TID</td><td>Peripheral neuropathy</td></tr>
+        <tr><td contenteditable>Rivaroxaban</td><td contenteditable>20 mg</td><td contenteditable>PO daily</td><td>Atrial fibrillation</td></tr>
+        <tr><td contenteditable>Metoprolol</td><td contenteditable>50 mg</td><td contenteditable>PO BID</td><td>Atrial fibrillation, rate control</td></tr>
+        <tr><td contenteditable>Diltiazem</td><td contenteditable>120 mg</td><td contenteditable>PO daily</td><td>Atrial fibrillation, rate control (new)</td></tr>
+        <tr><td contenteditable></td><td contenteditable></td><td contenteditable></td><td></td></tr>
+      </tbody>
+    </table>
+    <div class="hint">Cells are editable: add a drug to the empty row and ask again.</div>
+  </section>
+
+  <section>
+    <h2>Problem List</h2>
+    <ul>
+      <li>Atrial fibrillation, permanent (I48.21)</li>
+      <li>Chronic kidney disease stage 3b (N18.32)</li>
+      <li>Major depressive disorder (F33.1)</li>
+      <li>Peripheral neuropathy (G62.9)</li>
+      <li>Chronic low back pain (M54.50)</li>
+      <li>Insomnia (G47.00)</li>
+      <li>Essential hypertension (I10)</li>
+    </ul>
+    <h2 style="margin-top:16px">Recent Labs (09/23/2026)</h2>
+    <table class="labs">
+      <thead><tr><th>Test</th><th>Result</th><th>Reference</th></tr></thead>
+      <tbody>
+        <tr><td>Creatinine</td><td class="flag">1.6 mg/dL</td><td>0.6 – 1.1</td></tr>
+        <tr><td>eGFR</td><td class="flag">32 mL/min/1.73m²</td><td>> 60</td></tr>
+        <tr><td>Potassium</td><td>4.2 mmol/L</td><td>3.5 – 5.1</td></tr>
+        <tr><td>Sodium</td><td class="flag">134 mmol/L</td><td>136 – 145</td></tr>
+        <tr><td>Hemoglobin</td><td class="flag">11.2 g/dL</td><td>12.0 – 15.5</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section style="grid-column: 1 / -1">
+    <h2>Assessment &amp; Plan (09/25/2026)</h2>
+    <p class="note">82-year-old woman with permanent atrial fibrillation, CKD stage 3b, depression, neuropathy and chronic back pain. Rate control inadequate on metoprolol; diltiazem added today. Reports daytime drowsiness and two near-falls this month. Continue remaining regimen. Follow-up in 2 weeks.</p>
+  </section>
+</main>
+</body>
+</html>
