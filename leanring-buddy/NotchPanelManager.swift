@@ -51,8 +51,10 @@ final class NotchPanelManager {
     private var dismissObserver: NSObjectProtocol?
     private var screenChangeObserver: NSObjectProtocol?
 
-    private static let expandedWidth: CGFloat = 400
-    private static let collapsedExtraWidth: CGFloat = 28
+    private static let expandedWidth: CGFloat = 340
+    /// How far the collapsed island extends beyond the notch on each side and below it.
+    private static let collapsedExtraWidth: CGFloat = 10
+    private static let collapsedExtraHeight: CGFloat = 2
 
     /// The built-in display with a notch, if the Mac has one.
     static func notchScreen() -> NSScreen? {
@@ -149,7 +151,7 @@ final class NotchPanelManager {
             let contentHeight = hostingView?.fittingSize.height ?? 420
             size = CGSize(width: Self.expandedWidth, height: max(contentHeight, notchHeight + 200))
         } else {
-            size = CGSize(width: notchWidth + Self.collapsedExtraWidth, height: notchHeight + 8)
+            size = CGSize(width: notchWidth + Self.collapsedExtraWidth, height: notchHeight + Self.collapsedExtraHeight)
         }
         let frame = NSRect(x: notchCenterX - size.width / 2, y: screen.frame.maxY - size.height, width: size.width, height: size.height)
 
@@ -216,18 +218,25 @@ struct NotchRootView: View {
     var body: some View {
         VStack(spacing: 0) {
             if notchState.isExpanded {
-                CompanionPanelView(companionManager: companionManager, isEmbeddedInNotch: true)
-                    .padding(.top, notchHeight)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                Group {
+                    if companionManager.hasCompletedOnboarding && companionManager.allPermissionsGranted {
+                        NotchPanelContentView(companionManager: companionManager)
+                    } else {
+                        // Setup flow (permissions, Start) reuses the menu bar panel's rows.
+                        CompanionPanelView(companionManager: companionManager, isEmbeddedInNotch: true)
+                    }
+                }
+                .padding(.top, notchHeight)
+                .transition(.opacity.combined(with: .move(edge: .top)))
             } else {
                 collapsedContent
                     .frame(height: notchHeight)
-                    .padding(.bottom, 8)
+                    .padding(.bottom, 2)
             }
         }
         .frame(maxWidth: .infinity)
         .background(
-            NotchShape(cornerRadius: notchState.isExpanded ? 22 : 14)
+            NotchShape(cornerRadius: notchState.isExpanded ? 20 : 12)
                 .fill(Color.black)
                 .shadow(color: Color.black.opacity(notchState.isExpanded ? 0.45 : 0), radius: 18, x: 0, y: 8)
         )
@@ -253,7 +262,7 @@ struct NotchRootView: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.top, 2)
+        .padding(.top, 4)
     }
 }
 
@@ -301,9 +310,9 @@ private struct NotchEyes: View {
     }
 
     private var eye: some View {
-        RoundedRectangle(cornerRadius: 3, style: .continuous)
+        RoundedRectangle(cornerRadius: 2.5, style: .continuous)
             .fill(DS.Colors.overlayCursorBlue)
-            .frame(width: 9, height: isTalking ? 12 : 10)
+            .frame(width: 7, height: isTalking ? 10 : 8)
             .scaleEffect(x: 1, y: isBlinking ? 0.12 : 1, anchor: .center)
             .animation(.easeInOut(duration: 0.07), value: isBlinking)
             .animation(.easeInOut(duration: 0.18).repeatForever(autoreverses: true), value: isTalking)

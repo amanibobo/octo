@@ -293,7 +293,7 @@ struct BlueCursorView: View {
             // Caption: what the buddy is saying, revealed word by word. ViewThatFits
             // keeps a short phrase on one hugging line and wraps a long one at the
             // bubble's maximum width, growing downward; size changes animate.
-            if buddyIsVisibleOnThisScreen && !companionManager.captionText.isEmpty {
+            if buddyIsVisibleOnThisScreen && !companionManager.captionText.isEmpty && buddyNavigationMode == .followingCursor {
                 captionBubble
                     .overlay(
                         GeometryReader { geo in
