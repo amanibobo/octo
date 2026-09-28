@@ -44,13 +44,14 @@ final class RewindPanelManager {
     func show(match: ScreenHistoryMatch, frames: [ScreenHistoryFrame], query: String,
               lineIndicesForFrame: @escaping (ScreenHistoryFrame) -> [Int], nearGlobalPoint anchor: CGPoint) {
         hideTask?.cancel()
-        if panel == nil { createPanel() }
+        // Populate the model before the view exists so its first body pass sees real frames.
         model.frames = frames
         model.query = query
         model.matchedFrameID = match.frame.id
         model.matchedLineIndices = match.matchedLineIndices
         model.lineIndicesForFrame = lineIndicesForFrame
         model.selectedIndex = frames.firstIndex { $0.id == match.frame.id } ?? max(0, frames.count - 1)
+        if panel == nil { createPanel() }
         guard let panel else { return }
 
         panel.layoutIfNeeded()
@@ -204,11 +205,16 @@ private struct RewindView: View {
         VStack(spacing: 4) {
             HStack(spacing: 8) {
                 stepButton(systemName: "chevron.left") { model.selectedIndex = max(0, model.selectedIndex - 1) }
-                Slider(value: Binding(get: { Double(model.selectedIndex) }, set: { model.selectedIndex = Int($0.rounded()) }),
-                       in: 0...Double(max(model.frames.count - 1, 0)), step: 1)
-                    .tint(DS.Colors.overlayCursorBlue)
-                    .pointerCursor()
-                stepButton(systemName: "chevron.right") { model.selectedIndex = min(model.frames.count - 1, model.selectedIndex + 1) }
+                if model.frames.count > 1 {
+                    // A Slider with a zero-width range traps, so a single frame gets a static bar.
+                    Slider(value: Binding(get: { Double(model.selectedIndex) }, set: { model.selectedIndex = Int($0.rounded()) }),
+                           in: 0...Double(model.frames.count - 1), step: 1)
+                        .tint(DS.Colors.overlayCursorBlue)
+                        .pointerCursor()
+                } else {
+                    Capsule().fill(Color.white.opacity(0.15)).frame(height: 4).frame(maxWidth: .infinity)
+                }
+                stepButton(systemName: "chevron.right") { model.selectedIndex = min(max(model.frames.count - 1, 0), model.selectedIndex + 1) }
             }
             HStack {
                 Text(model.frames.first.map { ScreenHistoryFrame.describeAge($0.age()) } ?? "")

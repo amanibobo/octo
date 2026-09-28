@@ -308,6 +308,9 @@ final class CompanionManager: ObservableObject {
         print("🔑 Octo start — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission), onboarded: \(hasCompletedOnboarding)")
         startPermissionPolling()
         startServiceHealthPolling()
+        #if DEBUG
+        startTypedQuestionWatcher()
+        #endif
         // Vision's first text request loads models (several seconds). Pay it now, off-main.
         Task.detached(priority: .utility) {
             let startedAt = Date()
@@ -466,6 +469,26 @@ final class CompanionManager: ObservableObject {
 
     /// Polls the analysis service and the Worker so the panel can show whether
     /// the demo is fully wired before anyone presses the hotkey.
+    #if DEBUG
+    /// Dev hook: a typed question dropped at ~/Library/Logs/Sounder/ask.txt runs as if spoken.
+    private var typedQuestionTimer: Timer?
+    private func startTypedQuestionWatcher() {
+        let askFileURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Sounder/ask.txt")
+        typedQuestionTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, let data = try? Data(contentsOf: askFileURL), let question = String(data: data, encoding: .utf8) else { return }
+                try? FileManager.default.removeItem(at: askFileURL)
+                let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty, self.currentResponseTask == nil else { return }
+                print("⌨️ typed question: \(trimmed)")
+                self.lastTranscript = trimmed
+                self.pendingScreenAnalysisTask = self.makeScreenAnalysisTask()
+                self.runInteraction(transcript: trimmed)
+            }
+        }
+    }
+    #endif
+
     private func startServiceHealthPolling() {
         refreshServiceHealth()
         serviceHealthTimer = Timer.scheduledTimer(withTimeInterval: 8, repeats: true) { [weak self] _ in
