@@ -395,7 +395,7 @@ struct BlueCursorView: View {
                 .rotationEffect(.degrees(triangleRotationDegrees + 35))
                 .shadow(color: DS.Colors.overlayCursorBlue, radius: 8 + (buddyFlightScale - 1.0) * 20, x: 0, y: 0)
                 .scaleEffect(buddyFlightScale)
-                .opacity(buddyIsVisibleOnThisScreen && !companionManager.isDropCatcherActive && (companionManager.voiceState == .idle || companionManager.voiceState == .responding) ? cursorOpacity : 0)
+                .opacity(buddyIsVisibleOnThisScreen && (companionManager.voiceState == .idle || companionManager.voiceState == .responding) ? cursorOpacity : 0)
                 .position(cursorPosition)
                 .animation(
                     buddyNavigationMode == .followingCursor

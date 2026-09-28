@@ -107,9 +107,6 @@ final class CompanionManager: ObservableObject {
     private let whiteboardPanelManager = WhiteboardPanelManager()
     /// Translate in place.
     private let translatePipeline: TranslatePipeline
-    /// Drop it on Octo: a catcher that appears while something is being dragged.
-    private var dropCatcherPanelManager: DropCatcherPanelManager?
-    @Published private(set) var isDropCatcherActive = false
     /// Guided path: a numbered route the user clicks through; lights up as they go.
     private var guidedRouteElements: [ScreenElement] = []
     private var guidedRouteLabels: [String] = []
@@ -444,7 +441,6 @@ final class CompanionManager: ObservableObject {
 
         hasScreenRecordingPermission = WindowPositionManager.hasScreenRecordingPermission()
         updateScreenRewindRecorder()
-        if hasCompletedOnboarding { startDropCatcherIfNeeded() }
 
         let micAuthStatus = AVCaptureDevice.authorizationStatus(for: .audio)
         hasMicrophonePermission = micAuthStatus == .authorized
@@ -524,18 +520,6 @@ final class CompanionManager: ObservableObject {
 
     /// Polls the analysis service and the Worker so the panel can show whether
     /// the demo is fully wired before anyone presses the hotkey.
-    /// Starts watching for drags so the catcher can pop up. Called once permissions are in.
-    private func startDropCatcherIfNeeded() {
-        guard dropCatcherPanelManager == nil else { return }
-        let catcher = DropCatcherPanelManager(userContextStore: userContextStore, onActiveChange: { [weak self] isActive in
-            self?.isDropCatcherActive = isActive
-        }, onCaught: { [weak self] title in
-            self?.presentCaption(title.isEmpty ? "got it, pinned." : "got it: \(title)")
-        })
-        catcher.start()
-        dropCatcherPanelManager = catcher
-    }
-
     #if DEBUG
     /// Dev hook: a typed question dropped at ~/Library/Logs/Sounder/ask.txt runs as if spoken.
     private var typedQuestionTimer: Timer?
