@@ -58,6 +58,14 @@ Worker vars: `FIREWORKS_CHAT_MODEL`, `FIREWORKS_TRANSCRIPTION_MODEL`, `ELEVENLAB
 
 **Rx draws nothing**: findings are spoken (and listed in the report); the chart stays clean. Evidence offers a clickable card instead of badges.
 
+**Screen rewind**: `ScreenHistoryRecorder` keeps a rolling 15-minute, in-memory buffer (max 600 frames) of the display under the cursor: 1 fps capture, a 32×18 grayscale fingerprint skips unchanged ticks, changed frames get an 800 px JPEG thumbnail plus fast Vision OCR (boxes scaled to thumbnail pixels). Paused while an interaction captures. `RewindIntent.detect` (phrases like "ago", "earlier", "what did that error say", with "N minutes ago" parsed) is routed before every mode; `search` scores lines by keyword overlap with a time prior and falls back to `NLEmbedding` sentence distance; `RewindPanelManager` shows the frame with matched lines highlighted and a scrub bar over the buffer; the spoken answer is Claude constrained to that frame's text, with the matched lines as fallback. Toggle: Settings › Memory.
+
+**Dwell to ask**: while the hotkey is held, the gesture sampler tracks whether the cursor rests within 8 pt for 0.9 s. On release with no transcript within 1.3 s, `runInteraction(transcript: "what is this?", isDwellInteraction: true)` runs General mode with a 360×220 pt region around the dwell point and a prompt note that the user said nothing. Toggle: Settings › Memory.
+
+**Notch card vignettes**: `NotchModeVignetteView` draws a tiny animated "Octo in use" scene per mode in a `Canvas` (General flies to a line, Rx links two rows, Agent clicks three targets, Auto cycles). No image assets.
+
+**Debug hook** (DEBUG builds only): a question written to `~/Library/Logs/Sounder/ask.txt` runs as if spoken (typed-question watcher in `CompanionManager`), which is how rewind and any mode are exercised without a microphone.
+
 **Cursor Overlay**: A full-screen transparent `NSPanel` hosts the blue cursor companion. It's non-activating, joins all Spaces, and never steals focus. The cursor position, response text, waveform, and pointing animations all render in this overlay via SwiftUI through `NSHostingView`.
 
 **Global Push-To-Talk Shortcut**: Background push-to-talk uses a listen-only `CGEvent` tap instead of an AppKit global monitor so modifier-based shortcuts like `ctrl + option` are detected more reliably while the app is running in the background.
@@ -89,6 +97,11 @@ Worker vars: `FIREWORKS_CHAT_MODEL`, `FIREWORKS_TRANSCRIPTION_MODEL`, `ELEVENLAB
 | `Notch/NotchSettingsView.swift` | ~145 | Settings page: hotkey chord, on-device transcription, captions, buddy visibility, clipboard fallback, service status, calibrate, quit. |
 | `Notch/SkyLightOperator.swift` | ~75 | Private SkyLight space at max level for the notch window (dlsym, optional). |
 | `Notch/NotchContextView.swift` | ~270 | Context page: pinned items list, add field, Paste / Image… buttons, drag-and-drop. |
+| `Notch/NotchModeVignetteView.swift` | ~190 | Animated per-mode "Octo in use" scene drawn in a Canvas. |
+| `Sounder/Rewind/ScreenHistoryRecorder.swift` | ~280 | Rolling in-memory frame + OCR buffer, change detection, keyword/embedding search. |
+| `Sounder/Rewind/RewindIntent.swift` | ~60 | "…five minutes ago" / "what did that say" detection and time parsing. |
+| `Sounder/Rewind/RewindPanelManager.swift` | ~260 | Rewind card: frame with highlighted lines, scrub bar, Esc/close. |
+| `api/proxy.ts`, `vercel.json`, `.vercelignore` (repo root) | ~20 | Root Vercel entry so GitHub-triggered deploys (from the repo root) serve the same proxy as `worker/`. |
 | `Sounder/Context/UserContextStore.swift` | ~270 | Persisted notes/links/images + `promptBundle()` for the pipelines. |
 | `CompanionPanelView.swift` | ~560 | Panel UI: permissions, Start, mode picker (Auto/General/Data), service status, last-run latency/confidence readout, options (clipboard fallback, offline voice, show cursor, calibrate). |
 | `OverlayWindow.swift` | ~780 | Full-screen transparent overlay hosting the blue cursor and `DrawingLayerView`. Cursor animation, bezier pointing, multi-monitor. |
@@ -155,7 +168,7 @@ open leanring-buddy.xcodeproj
 
 ## Proxy (deployed on Vercel; Cloudflare Worker code)
 
-The proxy source is a Cloudflare-style `fetch(request, env)` handler. It is **deployed on Vercel** as an Edge Function: `worker/api/proxy.ts` wraps it with `process.env` as the env bindings, and `worker/vercel.json` rewrites every path to `/api/proxy?path=…` so the handler sees the original path. Production URL: `https://octo-proxy.vercel.app` (project `octo-proxy`, team amanibobos-projects). Info.plist `SounderWorkerBaseURL` points there, so the app no longer needs a local Worker.
+The proxy source is a Cloudflare-style `fetch(request, env)` handler. It is **deployed on Vercel** as an Edge Function: `worker/api/proxy.ts` wraps it with `process.env` as the env bindings, and `worker/vercel.json` rewrites every path to `/api/proxy?path=…` so the handler sees the original path. Production URL: `https://octo-proxy.vercel.app` (project `octo-proxy`, team amanibobos-projects). The project is also connected to the GitHub repo: every push to `main` deploys from the repo root, which is why `api/proxy.ts` + `vercel.json` exist at the root (they wrap `worker/api/proxy.ts`; `config = { runtime: "edge" }` must be declared literally there). Each deploy causes ~30 s of intermittent 404s while the alias moves. Info.plist `SounderWorkerBaseURL` points there, so the app no longer needs a local Worker.
 
 ```bash
 cd worker
