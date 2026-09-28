@@ -72,6 +72,13 @@ struct NotchSettingsView: View {
                           isOn: companionManager.isClipboardFallbackEnabled) { companionManager.setClipboardFallbackEnabled($0) }
             }
 
+            settingsGroup("Memory") {
+                toggleRow("Screen rewind", detail: "Keeps the last 15 minutes as low-res frames in memory, never on disk. Ask \u{201C}what did that error say five minutes ago?\u{201D}",
+                          isOn: companionManager.isScreenRewindEnabled) { companionManager.setScreenRewindEnabled($0) }
+                toggleRow("Dwell to ask", detail: "Hold the hotkey still over something for a second and Octo explains it, no need to speak.",
+                          isOn: companionManager.isDwellEnabled) { companionManager.setDwellEnabled($0) }
+            }
+
             settingsGroup("Services") {
                 infoRow("Model", value: companionManager.chatModelDisplayName)
                 infoRow("Proxy", value: companionManager.isWorkerReachable ? "connected" : "unreachable", isBad: !companionManager.isWorkerReachable)

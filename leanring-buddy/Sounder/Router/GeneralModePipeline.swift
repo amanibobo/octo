@@ -59,7 +59,8 @@ final class GeneralModePipeline {
         elements: [ScreenElement],
         regionOfInterestInCapturePixels: CGRect? = nil,
         conversationHistory: [ChatModelPriorTurn],
-        userContext: UserContextBundle? = nil
+        userContext: UserContextBundle? = nil,
+        regionReason: String? = nil
     ) async throws -> Answer {
         // Spatial context: when the user circled a region while holding the hotkey,
         // the model sees only that crop and the elements inside it. IDs are kept so
@@ -80,7 +81,7 @@ final class GeneralModePipeline {
                                       boundingBoxInCapturePixels: element.boundingBoxInCapturePixels.offsetBy(dx: -paddedRegion.minX, dy: -paddedRegion.minY),
                                       confidence: element.confidence)
                     }
-                regionNote = "the user circled part of the screen with the cursor while asking; the image is only that region. \"this\" or \"here\" means what is inside it.\n"
+                regionNote = (regionReason ?? "the user circled part of the screen with the cursor while asking") + "; the image is only that region. \"this\" or \"here\" means what is inside it.\n"
             }
         }
 

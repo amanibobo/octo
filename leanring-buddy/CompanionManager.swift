@@ -93,6 +93,19 @@ final class CompanionManager: ObservableObject {
     private let mediaCardPanelManager = MediaCardPanelManager()
     /// Notes, links and images the user pinned in the notch; folded into every prompt.
     let userContextStore = UserContextStore()
+    /// Rolling in-memory buffer of low-res frames + OCR for "what did that say five minutes ago?".
+    let screenHistoryRecorder = ScreenHistoryRecorder()
+    private let rewindPanelManager = RewindPanelManager()
+    /// Where the cursor sat still while the hotkey was held, if it did (global AppKit points).
+    private var pendingDwellPointGlobal: CGPoint?
+    private var dwellAnchorPointGlobal: CGPoint?
+    private var dwellAnchorStartedAt: Date?
+    private var holdStartedAt: Date?
+    private var lastTranscriptReceivedAt = Date.distantPast
+    private var dwellFallbackTask: Task<Void, Never>?
+    /// Hold still for this long (while holding the hotkey) to ask without speaking.
+    private static let dwellSeconds: TimeInterval = 0.9
+    private static let dwellRadiusInPoints: CGFloat = 8
     /// Snapshot of the pinned context taken when an interaction starts.
     private var userContextForCurrentInteraction: UserContextBundle?
 
@@ -225,6 +238,32 @@ final class CompanionManager: ObservableObject {
         SounderConfiguration.chatModel ?? SounderConfiguration.chatProvider
     }
 
+    /// Screen rewind: keep the last 15 minutes of low-res frames in memory.
+    @Published private(set) var isScreenRewindEnabled: Bool = UserDefaults.standard.object(forKey: "octoScreenRewindEnabled") == nil
+        ? true
+        : UserDefaults.standard.bool(forKey: "octoScreenRewindEnabled")
+
+    func setScreenRewindEnabled(_ isEnabled: Bool) {
+        isScreenRewindEnabled = isEnabled
+        UserDefaults.standard.set(isEnabled, forKey: "octoScreenRewindEnabled")
+        updateScreenRewindRecorder()
+        if !isEnabled { rewindPanelManager.hide() }
+    }
+
+    private func updateScreenRewindRecorder() {
+        screenHistoryRecorder.setEnabled(isScreenRewindEnabled && hasScreenRecordingPermission && hasCompletedOnboarding)
+    }
+
+    /// Dwell to ask: hold the hotkey still over something for a second, no speech needed.
+    @Published private(set) var isDwellEnabled: Bool = UserDefaults.standard.object(forKey: "octoDwellEnabled") == nil
+        ? true
+        : UserDefaults.standard.bool(forKey: "octoDwellEnabled")
+
+    func setDwellEnabled(_ isEnabled: Bool) {
+        isDwellEnabled = isEnabled
+        UserDefaults.standard.set(isEnabled, forKey: "octoDwellEnabled")
+    }
+
     func setOfflineVoiceEnabled(_ isEnabled: Bool) {
         isOfflineVoiceEnabled = isEnabled
         UserDefaults.standard.set(isEnabled, forKey: "sounderOfflineVoiceEnabled")
@@ -347,6 +386,7 @@ final class CompanionManager: ObservableObject {
         }
 
         hasScreenRecordingPermission = WindowPositionManager.hasScreenRecordingPermission()
+        updateScreenRewindRecorder()
 
         let micAuthStatus = AVCaptureDevice.authorizationStatus(for: .audio)
         hasMicrophonePermission = micAuthStatus == .authorized
@@ -523,6 +563,13 @@ final class CompanionManager: ObservableObject {
             clearDetectedElementLocation()
             clearCaption()
             mediaCardPanelManager.hide()
+            rewindPanelManager.hide()
+            dwellFallbackTask?.cancel()
+            dwellFallbackTask = nil
+            holdStartedAt = Date()
+            pendingDwellPointGlobal = nil
+            dwellAnchorPointGlobal = nil
+            dwellAnchorStartedAt = nil
 
             ClickyAnalytics.trackPushToTalkStarted()
             beginGestureSampling()
@@ -536,6 +583,9 @@ final class CompanionManager: ObservableObject {
                     },
                     submitDraftText: { [weak self] finalTranscript in
                         self?.lastTranscript = finalTranscript
+                        self?.lastTranscriptReceivedAt = Date()
+                        self?.dwellFallbackTask?.cancel()
+                        self?.dwellFallbackTask = nil
                         print("🗣️ Octo received transcript: \(finalTranscript)")
                         ClickyAnalytics.trackUserMessageSent(transcript: finalTranscript)
                         self?.runInteraction(transcript: finalTranscript)
@@ -553,6 +603,7 @@ final class CompanionManager: ObservableObject {
                 pendingScreenAnalysisTask?.cancel()
                 pendingScreenAnalysisTask = makeScreenAnalysisTask()
             }
+            scheduleDwellFallbackIfNeeded()
         case .none:
             break
         }
@@ -560,14 +611,14 @@ final class CompanionManager: ObservableObject {
 
     // MARK: - Interaction pipeline (the mode router)
 
-    private func runInteraction(transcript: String) {
+    private func runInteraction(transcript: String, isDwellInteraction: Bool = false) {
         currentResponseTask?.cancel()
         speechOutput.stopPlayback()
         screenChangeWatcher.stop()
 
         currentResponseTask = Task { [weak self] in
             guard let self else { return }
-            await self.performInteraction(transcript: transcript, isRerunAfterEdit: false)
+            await self.performInteraction(transcript: transcript, isRerunAfterEdit: false, isDwellInteraction: isDwellInteraction)
             if !Task.isCancelled {
                 self.currentResponseTask = nil
                 self.voiceState = .idle
@@ -576,9 +627,11 @@ final class CompanionManager: ObservableObject {
         }
     }
 
-    private func performInteraction(transcript: String, isRerunAfterEdit: Bool) async {
+    private func performInteraction(transcript: String, isRerunAfterEdit: Bool, isDwellInteraction: Bool = false) async {
         let interactionStartedAt = Date()
         voiceState = .processing
+        screenHistoryRecorder.isPaused = true
+        defer { screenHistoryRecorder.isPaused = false }
         var report = SounderInteractionReport(transcript: transcript, modeUsed: "—")
         userContextForCurrentInteraction = userContextStore.promptBundle()
         if let bundle = userContextForCurrentInteraction {
@@ -609,8 +662,25 @@ final class CompanionManager: ObservableObject {
             report.ocrSeconds = screenAnalysis.ocrSeconds
             print("👁️ \(textLines.count) OCR lines, \(elements.count) elements")
 
-            // 3. Route. "show me a paper / picture / video of…" works in every mode and
-            // is checked first, before "pull up" or "find" can read as an Agent task.
+            // 3. Route. A dwell (hotkey held still, nothing said) always explains what
+            // is under the cursor.
+            if isDwellInteraction {
+                try await runGeneralMode(transcript: transcript, capture: capture, elements: elements, regionOfInterest: regionOfInterestForDwell(screenAnalysis),
+                                         report: &report, regionReason: "the user held the hotkey with the cursor resting on this spot and said nothing; explain what is under the cursor in one or two sentences.")
+                finishReport(&report, startedAt: interactionStartedAt)
+                return
+            }
+
+            // Questions about the past ("what did that error say five minutes ago?")
+            // are answered from the local screen history, in every mode.
+            if let rewindRequest = RewindIntent.detect(transcript) {
+                try await runRewind(request: rewindRequest, report: &report)
+                finishReport(&report, startedAt: interactionStartedAt)
+                return
+            }
+
+            // "show me a paper / picture / video of…" works in every mode and is
+            // checked before "pull up" or "find" can read as an Agent task.
             if let mediaRequest = ResearchAgent.mediaRequest(in: transcript) {
                 try await runMediaLookup(request: mediaRequest, textLines: textLines, report: &report)
                 finishReport(&report, startedAt: interactionStartedAt)
@@ -651,6 +721,91 @@ final class CompanionManager: ObservableObject {
             finishReport(&report, startedAt: interactionStartedAt)
             try? await speak(Self.spokenErrorMessage(for: error))
         }
+    }
+
+    // MARK: - Screen rewind
+
+    private func runRewind(request: RewindRequest, report: inout SounderInteractionReport) async throws {
+        report.modeUsed = "Rewind"
+        report.analysisTask = "rewind"
+        guard isScreenRewindEnabled else {
+            try await speak("screen rewind is off. turn it on in settings and i'll start remembering.")
+            return
+        }
+        guard let match = screenHistoryRecorder.search(query: request.query, targetAge: request.targetAgeSeconds) else {
+            let remembered = screenHistoryRecorder.oldestFrameAge.map { ScreenHistoryFrame.describeAge($0) } ?? "nothing yet"
+            try await speak("i don't have that. i've only been watching since \(remembered).")
+            return
+        }
+        let ageText = ScreenHistoryFrame.describeAge(match.frame.age())
+        report.metricText = "frame \(ageText) · \(match.matchedLineIndices.count) lines · \(screenHistoryRecorder.frames.count) frames"
+        print("⏪ rewind: \"\(request.query)\" target \(request.targetAgeSeconds.map { "\(Int($0))s" } ?? "any") → \(ageText), score \(String(format: "%.2f", match.score))")
+
+        let query = request.query
+        let recorder = screenHistoryRecorder
+        rewindPanelManager.show(match: match, frames: recorder.frames, query: query,
+                                lineIndicesForFrame: { frame in recorder.lineIndicesMatching(query: query, in: frame) },
+                                nearGlobalPoint: NSEvent.mouseLocation)
+
+        // Speak an answer grounded in that frame's text. The matched lines are the
+        // fallback, so the answer is never worse than reading them back.
+        let matchedLines = match.matchedLineIndices.map { match.frame.lines[$0].text }
+        var spokenText = matchedLines.isEmpty
+            ? "here's what was on screen \(ageText). i've highlighted the frame."
+            : "\(ageText) it said: \(matchedLines.prefix(2).joined(separator: ". "))"
+        let frameText = String(match.frame.text.prefix(3500))
+        let systemPrompt = "you're octo. the user asked about something that was on their screen earlier. answer from the screen text below only, in one or two spoken sentences, lowercase, quoting the exact relevant line when there is one. start with how long ago it was. never invent text that is not in the frame."
+        let userText = "this frame is from \(ageText).\nmatched lines: \(matchedLines.isEmpty ? "(none)" : matchedLines.joined(separator: " | "))\n\nfull screen text:\n\(frameText)\n\nuser asked: \"\(report.transcript)\""
+        if let answer = try? await chatClient.completeText(systemPrompt: systemPrompt, userText: userText, maxTokens: 160, timeoutSeconds: 10),
+           !answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            spokenText = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        try Task.checkCancellation()
+        try await speak(spokenText)
+    }
+
+    // MARK: - Dwell (hold still to ask)
+
+    /// Tracks whether the cursor rested in one spot while the hotkey was held.
+    private func noteCursorForDwell(_ location: CGPoint, now: Date) {
+        if let anchor = dwellAnchorPointGlobal, hypot(location.x - anchor.x, location.y - anchor.y) <= Self.dwellRadiusInPoints {
+            if let startedAt = dwellAnchorStartedAt, now.timeIntervalSince(startedAt) >= Self.dwellSeconds {
+                pendingDwellPointGlobal = anchor
+            }
+        } else {
+            dwellAnchorPointGlobal = location
+            dwellAnchorStartedAt = now
+        }
+    }
+
+    /// After a release with a dwell, waits briefly for a transcript; if none comes,
+    /// explains what was under the cursor.
+    private func scheduleDwellFallbackIfNeeded() {
+        guard isDwellEnabled, let dwellPoint = pendingDwellPointGlobal else { return }
+        let releasedAt = Date()
+        dwellFallbackTask?.cancel()
+        dwellFallbackTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_300_000_000)
+            guard let self, !Task.isCancelled else { return }
+            guard self.lastTranscriptReceivedAt < releasedAt, self.currentResponseTask == nil else { return }
+            print("👁️ dwell: nothing said, explaining what's under the cursor at \(Int(dwellPoint.x)),\(Int(dwellPoint.y))")
+            self.pendingDwellPointGlobal = dwellPoint
+            self.pendingScreenAnalysisTask?.cancel()
+            self.pendingScreenAnalysisTask = nil
+            self.runInteraction(transcript: "what is this?", isDwellInteraction: true)
+        }
+    }
+
+    /// A box around the dwell point, in capture pixels, so General mode looks there.
+    private func regionOfInterestForDwell(_ screenAnalysis: ScreenAnalysis) -> CGRect? {
+        guard let dwellPoint = pendingDwellPointGlobal else { return nil }
+        pendingDwellPointGlobal = nil
+        let displayFrame = screenAnalysis.capture.geometry.displayFrame
+        let boxInPoints = CGRect(x: dwellPoint.x - 180, y: dwellPoint.y - 110, width: 360, height: 220)
+        let localRect = CGRect(x: boxInPoints.minX - displayFrame.minX, y: displayFrame.maxY - boxInPoints.maxY, width: boxInPoints.width, height: boxInPoints.height)
+        let fullBounds = CGRect(x: 0, y: 0, width: screenAnalysis.capture.cgImage.width, height: screenAnalysis.capture.cgImage.height)
+        let region = screenAnalysis.capture.geometry.capturePixelRect(fromDisplayPointRect: localRect).intersection(fullBounds)
+        return region.isNull || region.isEmpty ? nil : region
     }
 
     /// Looks up one paper, image, video or link with web search and holds the card
@@ -838,9 +993,10 @@ final class CompanionManager: ObservableObject {
         capture: SounderScreenCapture,
         elements: [ScreenElement],
         regionOfInterest: CGRect?,
-        report: inout SounderInteractionReport
+        report: inout SounderInteractionReport,
+        regionReason: String? = nil
     ) async throws {
-        report.modeUsed = regionOfInterest == nil ? "General" : "General (circled)"
+        report.modeUsed = regionReason != nil ? "General (dwell)" : (regionOfInterest == nil ? "General" : "General (circled)")
         let answerStartedAt = Date()
         let answer = try await generalModePipeline.answer(
             transcript: transcript,
@@ -848,7 +1004,8 @@ final class CompanionManager: ObservableObject {
             elements: elements,
             regionOfInterestInCapturePixels: regionOfInterest,
             conversationHistory: conversationHistory,
-            userContext: userContextForCurrentInteraction
+            userContext: userContextForCurrentInteraction,
+            regionReason: regionReason
         )
         report.planSeconds = Date().timeIntervalSince(answerStartedAt)
         try Task.checkCancellation()
@@ -1019,6 +1176,7 @@ final class CompanionManager: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 let location = NSEvent.mouseLocation
+                self.noteCursorForDwell(location, now: Date())
                 if let last = self.gesturePathPointsGlobal.last, hypot(location.x - last.x, location.y - last.y) < 1.5 { return }
                 self.gesturePathPointsGlobal.append(location)
             }
