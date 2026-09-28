@@ -62,17 +62,20 @@ struct NotchSettingsView: View {
                             NotchPillButton(title: "Record", systemImage: "record.circle", isProminent: true) { companionManager.beginRecordingHotkey() }
                         }
                     }
-                    Text(companionManager.isRecordingHotkey
-                         ? "Press the keys you want, then let go. Modifiers alone, or modifiers plus one key. Esc cancels."
-                         : "Hold to talk, release to send. Record your own chord, or pick a preset.")
-                        .font(.system(size: 11))
-                        .foregroundColor(companionManager.isRecordingHotkey ? DS.Colors.overlayCursorBlue.opacity(0.9) : .white.opacity(0.42))
-                        .fixedSize(horizontal: false, vertical: true)
-                    HStack(spacing: 5) {
-                        ForEach(BuddyPushToTalkShortcut.ShortcutOption.allCases, id: \.self) { option in
-                            NotchPillButton(title: option.displayText, isSelected: companionManager.pushToTalkChord == option.chord) {
-                                companionManager.setPushToTalkShortcut(option)
-                            }
+                    HStack(spacing: 8) {
+                        Text(companionManager.isRecordingHotkey
+                             ? "Press the keys you want, then let go. Modifiers alone, or modifiers plus one key. Esc cancels."
+                             : "Hold to talk, release to send.")
+                            .font(.system(size: 11))
+                            .foregroundColor(companionManager.isRecordingHotkey ? DS.Colors.overlayCursorBlue.opacity(0.9) : .white.opacity(0.42))
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                        if !companionManager.isRecordingHotkey, companionManager.pushToTalkChord != .controlOption {
+                            Button("Reset to ctrl + option") { companionManager.setPushToTalkChord(.controlOption) }
+                                .buttonStyle(.plain)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(DS.Colors.overlayCursorBlue.opacity(0.9))
+                                .pointerCursor()
                         }
                     }
                 }
