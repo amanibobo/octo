@@ -105,6 +105,11 @@ final class CompanionManager: ObservableObject {
     /// Whiteboard in the margins: conceptual answers get a sketched diagram.
     private let whiteboardPipeline: WhiteboardPipeline
     private let whiteboardPanelManager = WhiteboardPanelManager()
+    /// Translate in place.
+    private let translatePipeline: TranslatePipeline
+    /// Drop it on Octo: a catcher that appears while something is being dragged.
+    private var dropCatcherPanelManager: DropCatcherPanelManager?
+    @Published private(set) var isDropCatcherActive = false
     /// Guided path: a numbered route the user clicks through; lights up as they go.
     private var guidedRouteElements: [ScreenElement] = []
     private var guidedRouteLabels: [String] = []
@@ -202,6 +207,7 @@ final class CompanionManager: ObservableObject {
         self.agentModePipeline = AgentModePipeline(chatClient: chatClient)
         self.researchAgent = ResearchAgent(workerBaseURL: workerBaseURL)
         self.whiteboardPipeline = WhiteboardPipeline(chatClient: chatClient)
+        self.translatePipeline = TranslatePipeline(chatClient: chatClient)
 
         let offlineVoiceEnabled = UserDefaults.standard.object(forKey: "sounderOfflineVoiceEnabled") == nil
             ? true
@@ -438,6 +444,7 @@ final class CompanionManager: ObservableObject {
 
         hasScreenRecordingPermission = WindowPositionManager.hasScreenRecordingPermission()
         updateScreenRewindRecorder()
+        if hasCompletedOnboarding { startDropCatcherIfNeeded() }
 
         let micAuthStatus = AVCaptureDevice.authorizationStatus(for: .audio)
         hasMicrophonePermission = micAuthStatus == .authorized
@@ -517,6 +524,18 @@ final class CompanionManager: ObservableObject {
 
     /// Polls the analysis service and the Worker so the panel can show whether
     /// the demo is fully wired before anyone presses the hotkey.
+    /// Starts watching for drags so the catcher can pop up. Called once permissions are in.
+    private func startDropCatcherIfNeeded() {
+        guard dropCatcherPanelManager == nil else { return }
+        let catcher = DropCatcherPanelManager(userContextStore: userContextStore, onActiveChange: { [weak self] isActive in
+            self?.isDropCatcherActive = isActive
+        }, onCaught: { [weak self] title in
+            self?.presentCaption(title.isEmpty ? "got it, pinned." : "got it: \(title)")
+        })
+        catcher.start()
+        dropCatcherPanelManager = catcher
+    }
+
     #if DEBUG
     /// Dev hook: a typed question dropped at ~/Library/Logs/Sounder/ask.txt runs as if spoken.
     private var typedQuestionTimer: Timer?
@@ -765,6 +784,13 @@ final class CompanionManager: ObservableObject {
                 return
             }
 
+            // Translate in place: the circled lines, or every foreign line on screen.
+            if let translateRequest = TranslateIntent.detect(transcript) {
+                try await runTranslate(request: translateRequest, screenAnalysis: screenAnalysis, report: &report)
+                finishReport(&report, startedAt: interactionStartedAt)
+                return
+            }
+
             // Circle + a short command: type into it, do arithmetic on it, or copy it out.
             let circledRegion = screenAnalysis.regionOfInterestInCapturePixels
             if circledRegion != nil, let dictatedText = DictateIntent.text(from: transcript) {
@@ -988,6 +1014,48 @@ final class CompanionManager: ObservableObject {
         guidedRouteLabels = []
         guidedRouteGeometry = nil
         guidedRouteStep = 0
+    }
+
+    // MARK: - Translate in place
+
+    private func runTranslate(request: TranslateRequest, screenAnalysis: ScreenAnalysis, report: inout SounderInteractionReport) async throws {
+        report.modeUsed = "Translate"
+        report.analysisTask = "translate-\(request.targetLanguageName)"
+        let capture = screenAnalysis.capture
+        let region = screenAnalysis.regionOfInterestInCapturePixels
+        let scopedLines = screenAnalysis.textLines.filter { line in
+            guard let region else { return true }
+            return line.boundingBoxInCapturePixels.intersects(region)
+        }
+        let candidates = Array(TranslateIntent.candidateLines(scopedLines, target: request.targetLanguage, isScoped: region != nil).prefix(120))
+        gesturePathPointsGlobal = []
+        guard !candidates.isEmpty else {
+            try await speak(region == nil ? "everything on screen already looks like \(request.targetLanguageName). circle what you want translated." : "i don't see text to translate in there.")
+            return
+        }
+        presentCaption("translating \(candidates.count) lines…")
+        let translateStartedAt = Date()
+        let translations = try await translatePipeline.translate(lines: candidates.map(\.text), to: request.targetLanguageName)
+        report.planSeconds = Date().timeIntervalSince(translateStartedAt)
+        try Task.checkCancellation()
+
+        let cgImage = capture.cgImage
+        var primitives: [DrawingPrimitive] = regionOutlinePrimitives(region)
+        for (index, line) in candidates.enumerated() {
+            guard let translated = translations[index], !translated.isEmpty else { continue }
+            let box = line.boundingBoxInCapturePixels
+            let background = BackgroundColorSampler.sample(cgImage, around: box)
+            primitives.append(.textPatch(id: "translate-\(index)", rectInCapturePixels: box, text: translated,
+                                         backgroundRed: background.red, backgroundGreen: background.green, backgroundBlue: background.blue,
+                                         usesDarkText: background.luminance > 0.55))
+        }
+        drawingLayerModel.show(primitives, geometry: capture.geometry, autoClearAfterSeconds: 90)
+        report.metricText = "\(translations.count) of \(candidates.count) lines → \(request.targetLanguageName)"
+        print("🌐 translate: \(translations.count)/\(candidates.count) lines → \(request.targetLanguageName)")
+        let spokenText = translations.count <= 2
+            ? translations.keys.sorted().compactMap { translations[$0] }.joined(separator: ". ")
+            : "translated \(translations.count) lines into \(request.targetLanguageName). it's painted over the original."
+        try await speak(spokenText)
     }
 
     // MARK: - Lasso to extract

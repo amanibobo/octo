@@ -40,13 +40,15 @@ nonisolated enum DrawingPrimitive: Identifiable, Sendable {
     /// Numbered arrow from one element to the next (a hop in a flow or a guided step).
     /// `emphasis`: 0 = done/dim, 1 = upcoming, 2 = current (brightest).
     case arrow(id: String, fromRectInCapturePixels: CGRect, toRectInCapturePixels: CGRect, number: Int, label: String?, color: DrawingColor, emphasis: Int)
+    /// Text painted exactly over a box on a patch that matches the page behind it (translate in place).
+    case textPatch(id: String, rectInCapturePixels: CGRect, text: String, backgroundRed: Double, backgroundGreen: Double, backgroundBlue: Double, usesDarkText: Bool)
 
     var id: String {
         switch self {
         case .circle(let id, _, _, _), .bar(let id, _, _), .polyline(let id, _, _),
              .band(let id, _, _, _), .highlight(let id, _, _), .badge(let id, _, _),
              .link(let id, _, _, _, _), .underline(let id, _, _), .footnoteDrawer(let id, _),
-             .arrow(let id, _, _, _, _, _, _):
+             .arrow(let id, _, _, _, _, _, _), .textPatch(let id, _, _, _, _, _, _):
             return id
         }
     }

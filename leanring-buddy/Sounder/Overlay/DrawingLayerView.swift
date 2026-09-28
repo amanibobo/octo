@@ -244,6 +244,24 @@ struct DrawingLayerView: View {
                     .position(x: apex.x, y: apex.y)
             }
 
+        case .textPatch(_, let rectInCapturePixels, let text, let red, let green, let blue, let usesDarkText):
+            let rect = geometry.overlayRect(fromCapturePixelRect: rectInCapturePixels)
+            let patch = rect.insetBy(dx: -3, dy: -2)
+            ZStack {
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(Color(red: red, green: green, blue: blue))
+                Text(text)
+                    .font(.system(size: max(9, rect.height * 0.74), weight: .regular))
+                    .foregroundColor(usesDarkText ? Color(white: 0.1) : Color(white: 0.97))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.45)
+                    .padding(.horizontal, 2)
+                    .frame(width: patch.width, height: patch.height, alignment: .leading)
+            }
+            .frame(width: patch.width, height: patch.height)
+            .position(x: patch.midX, y: patch.midY)
+            .opacity(Double(model.drawProgress))
+
         case .underline(let id, let rectInCapturePixels, let color):
             let rect = geometry.overlayRect(fromCapturePixelRect: rectInCapturePixels)
             RoughLineShape(seed: id, from: CGPoint(x: rect.minX - 3, y: rect.maxY + 2), to: CGPoint(x: rect.maxX + 3, y: rect.maxY + 2))

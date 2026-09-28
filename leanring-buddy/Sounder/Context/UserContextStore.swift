@@ -124,11 +124,27 @@ final class UserContextStore: ObservableObject {
     /// Image, URL or text from the clipboard, in that order of preference.
     @discardableResult
     func addFromPasteboard() -> Bool {
-        let pasteboard = NSPasteboard.general
-        if let fileURLs = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
-           let imageFile = fileURLs.first(where: { UTType(filenameExtension: $0.pathExtension)?.conforms(to: .image) == true }) {
-            addImageFile(at: imageFile)
-            return true
+        add(from: NSPasteboard.general)
+    }
+
+    /// Same, from any pasteboard (a drag's, for instance).
+    @discardableResult
+    func add(from pasteboard: NSPasteboard) -> Bool {
+        if let fileURLs = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !fileURLs.isEmpty {
+            var addedAny = false
+            for fileURL in fileURLs.prefix(6) {
+                if UTType(filenameExtension: fileURL.pathExtension)?.conforms(to: .image) == true {
+                    addImageFile(at: fileURL)
+                    addedAny = true
+                } else if let text = try? String(contentsOf: fileURL, encoding: .utf8) {
+                    addText("\(fileURL.lastPathComponent):\n\(text.prefix(4000))")
+                    addedAny = true
+                } else {
+                    addText("file: \(fileURL.lastPathComponent) (\(fileURL.path))")
+                    addedAny = true
+                }
+            }
+            if addedAny { return true }
         }
         if let image = NSImage(pasteboard: pasteboard) {
             addImage(image, title: "Pasted image")

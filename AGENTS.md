@@ -72,6 +72,10 @@ Worker vars: `FIREWORKS_CHAT_MODEL`, `FIREWORKS_TRANSCRIPTION_MODEL`, `ELEVENLAB
 
 **Routes and whiteboard (General mode)**: the answer schema carries `route_element_ids`/`route_labels`/`route_kind` (`flow` draws numbered `.arrow` primitives between elements via `DrawingOpsBuilder.route`; `guide` starts a guided path that lights each step as the user clicks it, using global/local mouse monitors) and `sketch_diagram` (conceptual questions → `WhiteboardPipeline` returns a node/edge JSON, `WhiteboardPanelManager` lays it out in layers and sketches it in the emptiest margin, wiped on the next hotkey or after 50 s).
 
+**Translate in place**: `TranslateIntent` ("translate this to spanish", "in english") → OCR lines in the circled region, or every line whose `NLLanguageRecognizer` language differs from the target → `TranslatePipeline` (Claude JSON, one translation per index) → `.textPatch` primitives painted over each line at its size, on a background sampled by `BackgroundColorSampler` from the strips just above and below the box, with dark/light text chosen by luminance.
+
+**Drop it on Octo**: `DropCatcherPanelManager` watches global `leftMouseDragged`; when the system drag pasteboard's changeCount has moved (a real drag session, not a text selection) and the pointer has travelled 40 pt, a 132 pt catcher panel (Octo with two tentacles, its own `NSHostingView` subclass registered for file/URL/string/image drag types) appears 110 pt to the right of the drag start. A drop goes to `UserContextStore.add(from:)`; the tentacles curl, Octo bounces, the caption says what was pinned. The cursor buddy hides while the catcher is up (`isDropCatcherActive`).
+
 **Glass cards**: `GlassCardBackground` (system `glassEffect` on macOS 26, `NSVisualEffectView` blur below) backs the rewind card.
 
 **Cursor Overlay**: A full-screen transparent `NSPanel` hosts the blue cursor companion. It's non-activating, joins all Spaces, and never steals focus. The cursor position, response text, waveform, and pointing animations all render in this overlay via SwiftUI through `NSHostingView`.
@@ -112,6 +116,8 @@ Worker vars: `FIREWORKS_CHAT_MODEL`, `FIREWORKS_TRANSCRIPTION_MODEL`, `ELEVENLAB
 | `Sounder/Router/QuickIntents.swift` | ~300 | Dictate / ink-math / extract intents, CSV·JSON·markdown builders, word-box grid. |
 | `Sounder/Router/WhiteboardPipeline.swift` | ~80 | Conceptual question → node/edge diagram JSON. |
 | `Sounder/Overlay/WhiteboardPanelManager.swift` | ~240 | Layered layout + sketched rendering of the diagram in a free margin. |
+| `Sounder/Router/TranslatePipeline.swift` | ~130 | Translate intent + language filter, Claude line translation, background colour sampler. |
+| `Sounder/Overlay/DropCatcherPanelManager.swift` | ~300 | Drag detection, catcher panel with tentacle animation, drop → context. |
 | `api/proxy.ts`, `vercel.json`, `.vercelignore` (repo root) | ~20 | Root Vercel entry so GitHub-triggered deploys (from the repo root) serve the same proxy as `worker/`. |
 | `Sounder/Context/UserContextStore.swift` | ~270 | Persisted notes/links/images + `promptBundle()` for the pipelines. |
 | `CompanionPanelView.swift` | ~560 | Panel UI: permissions, Start, mode picker (Auto/General/Data), service status, last-run latency/confidence readout, options (clipboard fallback, offline voice, show cursor, calibrate). |
