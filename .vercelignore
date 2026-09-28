@@ -1,0 +1,11 @@
+services
+leanring-buddy
+leanring-buddy.xcodeproj
+demo
+docs
+worker/node_modules
+worker/.vercel
+worker/.dev.vars
+worker/.env*
+*.png
+*.md
