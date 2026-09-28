@@ -37,12 +37,16 @@ nonisolated enum DrawingPrimitive: Identifiable, Sendable {
     case underline(id: String, rectInCapturePixels: CGRect, color: DrawingColor)
     /// Citation drawer pinned to the bottom-right of the screen.
     case footnoteDrawer(id: String, lines: [String])
+    /// Numbered arrow from one element to the next (a hop in a flow or a guided step).
+    /// `emphasis`: 0 = done/dim, 1 = upcoming, 2 = current (brightest).
+    case arrow(id: String, fromRectInCapturePixels: CGRect, toRectInCapturePixels: CGRect, number: Int, label: String?, color: DrawingColor, emphasis: Int)
 
     var id: String {
         switch self {
         case .circle(let id, _, _, _), .bar(let id, _, _), .polyline(let id, _, _),
              .band(let id, _, _, _), .highlight(let id, _, _), .badge(let id, _, _),
-             .link(let id, _, _, _, _), .underline(let id, _, _), .footnoteDrawer(let id, _):
+             .link(let id, _, _, _, _), .underline(let id, _, _), .footnoteDrawer(let id, _),
+             .arrow(let id, _, _, _, _, _, _):
             return id
         }
     }
@@ -110,6 +114,30 @@ enum DrawingOpsBuilder {
             primitives.append(.polyline(id: "fit-curve", pointsInCapturePixels: curvePoints, clipRectInCapturePixels: chart.boundingBoxInCapturePixels))
             let labelAnchor = CGPoint(x: chart.boundingBoxInCapturePixels.minX + 8, y: chart.boundingBoxInCapturePixels.minY + 8)
             primitives.append(.badge(id: "fit-label", anchorInCapturePixels: labelAnchor, text: "\(fit.modelName) fit · R² \(String(format: "%.2f", fit.rSquared))"))
+        }
+        return primitives
+    }
+
+    /// A numbered route through elements: arrows between consecutive elements plus
+    /// a box on each. `currentStep` (0-based) is drawn brightest; earlier steps are
+    /// green (done), later ones blue. Pass nil to draw every hop the same (a flow).
+    static func route(through elements: [ScreenElement], labels: [String], currentStep: Int?) -> [DrawingPrimitive] {
+        var primitives: [DrawingPrimitive] = []
+        for (index, element) in elements.enumerated() {
+            let state: (color: DrawingColor, emphasis: Int) = {
+                guard let currentStep else { return (.blue, 1) }
+                if index < currentStep { return (.green, 0) }
+                if index == currentStep { return (.orange, 2) }
+                return (.blue, 1)
+            }()
+            primitives.append(.circle(id: "route-box-\(index)", rectInCapturePixels: element.boundingBoxInCapturePixels.insetBy(dx: -6, dy: -4),
+                                      tagNumber: index + 1, color: state.color))
+            if index + 1 < elements.count {
+                let label = index < labels.count ? labels[index] : nil
+                primitives.append(.arrow(id: "route-arrow-\(index)", fromRectInCapturePixels: element.boundingBoxInCapturePixels,
+                                         toRectInCapturePixels: elements[index + 1].boundingBoxInCapturePixels, number: index + 1,
+                                         label: label, color: state.color, emphasis: state.emphasis))
+            }
         }
         return primitives
     }

@@ -112,6 +112,48 @@ final class RewindPanelManager {
     }
 }
 
+// MARK: - Glass
+
+/// Liquid-glass card background: the system glass material on macOS 26, a
+/// vibrant blur with a soft rim on earlier systems. No coloured outline.
+struct GlassCardBackground: View {
+    let cornerRadius: CGFloat
+
+    var body: some View {
+        if #available(macOS 26.0, *) {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(Color.clear)
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        } else {
+            VisualEffectBlur(material: .hudWindow, blendingMode: .behindWindow)
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(LinearGradient(colors: [Color.white.opacity(0.10), Color.white.opacity(0.02)], startPoint: .top, endPoint: .bottom))
+                )
+                .overlay(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).stroke(Color.white.opacity(0.16), lineWidth: 1))
+        }
+    }
+}
+
+struct VisualEffectBlur: NSViewRepresentable {
+    let material: NSVisualEffectView.Material
+    let blendingMode: NSVisualEffectView.BlendingMode
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = material
+        view.blendingMode = blendingMode
+        view.state = .active
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
+        nsView.material = material
+        nsView.blendingMode = blendingMode
+    }
+}
+
 // MARK: - View
 
 private struct RewindView: View {
@@ -127,13 +169,9 @@ private struct RewindView: View {
             scrubBar
             matchedText
         }
-        .padding(12)
+        .padding(14)
         .frame(width: 640, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.black.opacity(0.92))
-                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(DS.Colors.overlayCursorBlue.opacity(0.6), lineWidth: 1))
-        )
+        .background(GlassCardBackground(cornerRadius: 20))
         .environment(\.colorScheme, .dark)
     }
 
@@ -179,15 +217,17 @@ private struct RewindView: View {
                     .frame(width: imageWidth, height: imageHeight)
                 ForEach(highlightedLineIndices(for: frame), id: \.self) { lineIndex in
                     let box = frame.lines[lineIndex].boundingBoxInCapturePixels
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .stroke(DS.Colors.overlayCursorBlue, lineWidth: 2)
-                        .background(RoundedRectangle(cornerRadius: 3, style: .continuous).fill(DS.Colors.overlayCursorBlue.opacity(0.18)))
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(DS.Colors.overlayCursorBlue.opacity(0.22))
+                        .overlay(RoundedRectangle(cornerRadius: 4, style: .continuous).stroke(DS.Colors.overlayCursorBlue.opacity(0.7), lineWidth: 1.5))
+                        .shadow(color: DS.Colors.overlayCursorBlue.opacity(0.5), radius: 6)
                         .frame(width: box.width * scale + 6, height: box.height * scale + 6)
                         .offset(x: box.minX * scale - 3, y: box.minY * scale - 3)
                 }
             }
             .frame(width: imageWidth, height: imageHeight)
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.white.opacity(0.12), lineWidth: 1))
         } else {
             Text("nothing remembered yet")
                 .font(.system(size: 12))
@@ -219,12 +259,12 @@ private struct RewindView: View {
             HStack {
                 Text(model.frames.first.map { ScreenHistoryFrame.describeAge($0.age()) } ?? "")
                 Spacer()
-                Text("\(model.frames.count) frames · kept 15 min · in memory only")
+                Text("\(model.frames.count) frames · 15 min · in memory only")
                 Spacer()
                 Text("now")
             }
-            .font(.system(size: 10))
-            .foregroundColor(.white.opacity(0.4))
+            .font(.system(size: 10, weight: .medium, design: .rounded))
+            .foregroundColor(.white.opacity(0.45))
         }
     }
 

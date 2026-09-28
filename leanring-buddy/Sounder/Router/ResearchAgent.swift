@@ -51,19 +51,21 @@ final class ResearchAgent {
 
     private static let mediaVerbs = ["show me", "show us", "pull up", "bring up", "find me", "find a", "find an", "find the", "look up", "get me", "can you find", "can you show", "could you find", "could you show", "search for", "google", "is there a", "i want to see", "let me see"]
     private static let mediaNouns: [(noun: String, kind: MediaCard.Kind)] = [
-        ("paper", .paper), ("papers", .paper), ("study", .paper), ("studies", .paper), ("trial", .paper), ("article", .paper), ("research on", .paper), ("evidence", .paper), ("guideline", .paper), ("publication", .paper),
-        ("image", .image), ("picture", .image), ("photo", .image), ("diagram", .image), ("figure", .image), ("illustration", .image), ("chart of", .image), ("what does", .image),
+        ("paper", .paper), ("papers", .paper), ("study", .paper), ("studies", .paper), ("trial", .paper), ("article", .paper), ("research on", .paper), ("publication", .paper),
+        ("image", .image), ("picture", .image), ("photo", .image), ("diagram of", .image), ("illustration", .image),
         ("video", .video), ("clip", .video), ("youtube", .video), ("tutorial", .video), ("lecture", .video),
-        ("link", .link), ("website", .link), ("page", .link), ("documentation", .link), ("docs for", .link)
+        ("website", .link), ("web page", .link), ("documentation", .link), ("docs for", .link), ("a link", .link), ("the link", .link)
     ]
+    /// Questions about doing something on this screen are never media lookups.
+    private static let onScreenPhrases = ["how to", "how do i", "how can i", "where do i", "where is", "what are the steps", "walk me through", "on this page", "on this screen", "on my screen", "here"]
 
     /// Detects "show me a paper on…", "pull up a video of…", "find a picture of…"
     /// in any mode. Returns nil for ordinary questions so they route as before.
     static func mediaRequest(in transcript: String) -> MediaRequest? {
         let lowered = transcript.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         guard mediaVerbs.contains(where: { lowered.contains($0) }) else { return nil }
+        guard !onScreenPhrases.contains(where: { lowered.contains($0) }) else { return nil }
         guard let matchedNoun = mediaNouns.first(where: { lowered.contains($0.noun) }) else { return nil }
-        // "what does X look like" reads as an image request even without a verb match above.
         return MediaRequest(query: transcript, preferredKind: matchedNoun.kind)
     }
 

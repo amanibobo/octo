@@ -79,6 +79,12 @@ final class CompanionManager: ObservableObject {
     /// hotkey is held. Drawn as a trail by the overlay; the bounding box becomes
     /// the region of interest for the question when it is big enough to be a gesture.
     @Published private(set) var gesturePathPointsGlobal: [CGPoint] = []
+    /// The visible trail: recent cursor positions with the time they were sampled.
+    /// Points older than `gestureTrailLifetime` are dropped every tick, so the
+    /// trail fades from the tail while the raw path above still defines the region.
+    @Published private(set) var gestureTrailPoints: [GestureTrailPoint] = []
+    static let gestureTrailLifetime: TimeInterval = 1.1
+    private var gestureTrailFadeTimer: Timer?
     private var gestureSamplingTimer: Timer?
     private var pendingGestureBoundsGlobal: CGRect?
     private var lastRegionOfInterestInCapturePixels: CGRect?
@@ -96,6 +102,15 @@ final class CompanionManager: ObservableObject {
     /// Rolling in-memory buffer of low-res frames + OCR for "what did that say five minutes ago?".
     let screenHistoryRecorder = ScreenHistoryRecorder()
     private let rewindPanelManager = RewindPanelManager()
+    /// Whiteboard in the margins: conceptual answers get a sketched diagram.
+    private let whiteboardPipeline: WhiteboardPipeline
+    private let whiteboardPanelManager = WhiteboardPanelManager()
+    /// Guided path: a numbered route the user clicks through; lights up as they go.
+    private var guidedRouteElements: [ScreenElement] = []
+    private var guidedRouteLabels: [String] = []
+    private var guidedRouteGeometry: CaptureGeometry?
+    private var guidedRouteStep = 0
+    private var guidedRouteClickMonitors: [Any] = []
     /// Where the cursor sat still while the hotkey was held, if it did (global AppKit points).
     private var pendingDwellPointGlobal: CGPoint?
     private var dwellAnchorPointGlobal: CGPoint?
@@ -186,6 +201,7 @@ final class CompanionManager: ObservableObject {
         self.clinicalModePipeline = ClinicalModePipeline(clinicalClient: ClinicalServiceClient(baseURL: SounderConfiguration.analysisServiceBaseURL), chatClient: chatClient)
         self.agentModePipeline = AgentModePipeline(chatClient: chatClient)
         self.researchAgent = ResearchAgent(workerBaseURL: workerBaseURL)
+        self.whiteboardPipeline = WhiteboardPipeline(chatClient: chatClient)
 
         let offlineVoiceEnabled = UserDefaults.standard.object(forKey: "sounderOfflineVoiceEnabled") == nil
             ? true
@@ -510,9 +526,22 @@ final class CompanionManager: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self, let data = try? Data(contentsOf: askFileURL), let question = String(data: data, encoding: .utf8) else { return }
                 try? FileManager.default.removeItem(at: askFileURL)
-                let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
+                var trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty, self.currentResponseTask == nil else { return }
-                print("⌨️ typed question: \(trimmed)")
+                // Optional first line "roi: x y w h" in top-left screen points stands in for a circle gesture.
+                if trimmed.lowercased().hasPrefix("roi:"), let newline = trimmed.firstIndex(of: "\n") {
+                    let numbers = trimmed[..<newline].dropFirst(4).split(separator: " ").compactMap { Double($0) }
+                    if numbers.count == 4, let screen = NSScreen.main {
+                        self.pendingGestureBoundsGlobal = CGRect(x: numbers[0], y: screen.frame.maxY - numbers[1] - numbers[3], width: numbers[2], height: numbers[3])
+                    }
+                    trimmed = String(trimmed[trimmed.index(after: newline)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+                print("⌨️ typed question: \(trimmed)\(self.pendingGestureBoundsGlobal.map { " roi \($0.integral)" } ?? "")")
+                self.mediaCardPanelManager.hide()
+                self.rewindPanelManager.hide()
+                self.whiteboardPanelManager.hide()
+                self.endGuidedRoute()
+                self.drawingLayerModel.clear()
                 self.lastTranscript = trimmed
                 self.pendingScreenAnalysisTask = self.makeScreenAnalysisTask()
                 self.runInteraction(transcript: trimmed)
@@ -619,6 +648,8 @@ final class CompanionManager: ObservableObject {
             clearCaption()
             mediaCardPanelManager.hide()
             rewindPanelManager.hide()
+            whiteboardPanelManager.hide()
+            endGuidedRoute()
             dwellFallbackTask?.cancel()
             dwellFallbackTask = nil
             holdStartedAt = Date()
@@ -730,6 +761,24 @@ final class CompanionManager: ObservableObject {
             // are answered from the local screen history, in every mode.
             if let rewindRequest = RewindIntent.detect(transcript) {
                 try await runRewind(request: rewindRequest, report: &report)
+                finishReport(&report, startedAt: interactionStartedAt)
+                return
+            }
+
+            // Circle + a short command: type into it, do arithmetic on it, or copy it out.
+            let circledRegion = screenAnalysis.regionOfInterestInCapturePixels
+            if circledRegion != nil, let dictatedText = DictateIntent.text(from: transcript) {
+                try await runDictate(text: dictatedText, screenAnalysis: screenAnalysis, report: &report)
+                finishReport(&report, startedAt: interactionStartedAt)
+                return
+            }
+            if circledRegion != nil, let mathRequest = InkMathIntent.detect(transcript) {
+                try await runInkMath(request: mathRequest, screenAnalysis: screenAnalysis, report: &report)
+                finishReport(&report, startedAt: interactionStartedAt)
+                return
+            }
+            if let extractRequest = ExtractIntent.detect(transcript, hasRegion: circledRegion != nil) {
+                try await runExtract(request: extractRequest, screenAnalysis: screenAnalysis, report: &report)
                 finishReport(&report, startedAt: interactionStartedAt)
                 return
             }
@@ -861,6 +910,210 @@ final class CompanionManager: ObservableObject {
         let fullBounds = CGRect(x: 0, y: 0, width: screenAnalysis.capture.cgImage.width, height: screenAnalysis.capture.cgImage.height)
         let region = screenAnalysis.capture.geometry.capturePixelRect(fromDisplayPointRect: localRect).intersection(fullBounds)
         return region.isNull || region.isEmpty ? nil : region
+    }
+
+    // MARK: - Whiteboard
+
+    private func showWhiteboard(_ diagram: WhiteboardDiagram, elements: [ScreenElement], geometry: CaptureGeometry) {
+        guard let screen = NSScreen.screens.first(where: { $0.frame == geometry.displayFrame }) ?? NSScreen.main else { return }
+        // Where the screen's text lives, in global AppKit coords; the sketch goes beside it.
+        var occupied: CGRect?
+        for element in elements {
+            let box = element.boundingBoxInCapturePixels
+            let bottomLeft = geometry.globalAppKitPoint(fromCapturePixel: CGPoint(x: box.minX, y: box.maxY))
+            let topRight = geometry.globalAppKitPoint(fromCapturePixel: CGPoint(x: box.maxX, y: box.minY))
+            let rect = CGRect(x: bottomLeft.x, y: bottomLeft.y, width: topRight.x - bottomLeft.x, height: topRight.y - bottomLeft.y)
+            occupied = occupied.map { $0.union(rect) } ?? rect
+        }
+        whiteboardPanelManager.show(diagram, avoiding: occupied ?? screen.visibleFrame.insetBy(dx: 200, dy: 120), on: screen)
+    }
+
+    // MARK: - Guided path
+
+    private func globalRect(forCapturePixelRect box: CGRect, geometry: CaptureGeometry) -> CGRect {
+        let bottomLeft = geometry.globalAppKitPoint(fromCapturePixel: CGPoint(x: box.minX, y: box.maxY))
+        let topRight = geometry.globalAppKitPoint(fromCapturePixel: CGPoint(x: box.maxX, y: box.minY))
+        return CGRect(x: bottomLeft.x, y: bottomLeft.y, width: topRight.x - bottomLeft.x, height: topRight.y - bottomLeft.y)
+    }
+
+    private func startGuidedRoute(elements: [ScreenElement], labels: [String], geometry: CaptureGeometry) {
+        endGuidedRoute()
+        guidedRouteElements = elements
+        guidedRouteLabels = labels
+        guidedRouteGeometry = geometry
+        guidedRouteStep = 0
+        redrawGuidedRoute()
+        let handler: (NSEvent) -> Void = { [weak self] _ in
+            Task { @MainActor [weak self] in self?.guidedRouteDidClick(at: NSEvent.mouseLocation) }
+        }
+        if let globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown], handler: handler) {
+            guidedRouteClickMonitors.append(globalMonitor)
+        }
+        if let localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown], handler: { event in handler(event); return event }) {
+            guidedRouteClickMonitors.append(localMonitor)
+        }
+        print("🧭 guide: \(elements.count) steps, waiting for step 1")
+    }
+
+    private func redrawGuidedRoute() {
+        guard let geometry = guidedRouteGeometry else { return }
+        let primitives = DrawingOpsBuilder.route(through: guidedRouteElements, labels: guidedRouteLabels, currentStep: guidedRouteStep)
+        drawingLayerModel.show(primitives, geometry: geometry, autoClearAfterSeconds: 180)
+    }
+
+    private func guidedRouteDidClick(at globalPoint: CGPoint) {
+        guard let geometry = guidedRouteGeometry, guidedRouteStep < guidedRouteElements.count else { return }
+        let target = globalRect(forCapturePixelRect: guidedRouteElements[guidedRouteStep].boundingBoxInCapturePixels, geometry: geometry).insetBy(dx: -14, dy: -10)
+        guard target.contains(globalPoint) else { return }
+        guidedRouteStep += 1
+        print("🧭 guide: step \(guidedRouteStep) of \(guidedRouteElements.count) done")
+        if guidedRouteStep >= guidedRouteElements.count {
+            let finished = DrawingOpsBuilder.route(through: guidedRouteElements, labels: guidedRouteLabels, currentStep: guidedRouteElements.count)
+            drawingLayerModel.show(finished, geometry: geometry, autoClearAfterSeconds: 4)
+            endGuidedRoute(keepDrawing: true)
+            presentCaption("that's all the steps.")
+        } else {
+            // Give the click a moment to land before repainting over the new state.
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                self?.redrawGuidedRoute()
+            }
+        }
+    }
+
+    private func endGuidedRoute(keepDrawing: Bool = false) {
+        for monitor in guidedRouteClickMonitors { NSEvent.removeMonitor(monitor) }
+        guidedRouteClickMonitors = []
+        guidedRouteElements = []
+        guidedRouteLabels = []
+        guidedRouteGeometry = nil
+        guidedRouteStep = 0
+    }
+
+    // MARK: - Lasso to extract
+
+    private func runExtract(request: ExtractRequest, screenAnalysis: ScreenAnalysis, report: inout SounderInteractionReport) async throws {
+        report.modeUsed = "Extract"
+        report.analysisTask = "extract-\(request.format.rawValue)"
+        let capture = screenAnalysis.capture
+        let region = screenAnalysis.regionOfInterestInCapturePixels
+        let lines = screenAnalysis.textLines.filter { line in
+            guard let region else { return true }
+            return line.boundingBoxInCapturePixels.intersects(region)
+        }
+        guard !lines.isEmpty else {
+            try await speak("i don't see any text in there.")
+            return
+        }
+        gesturePathPointsGlobal = []
+
+        var clipboardText: String
+        var primitives: [DrawingPrimitive] = regionOutlinePrimitives(region)
+        var spokenText: String
+        let table = request.format == .text ? nil : TableExtractor.extractTable(from: lines, imageSize: capture.pixelSize)
+        if let table, table.rowCount >= 1, table.columnCount >= 2, table.extractionConfidence >= 0.4 {
+            switch request.format {
+            case .json: clipboardText = ExtractIntent.json(headers: table.headers, rows: table.rows)
+            case .markdown: clipboardText = ExtractIntent.markdown(headers: table.headers, rows: table.rows)
+            case .csv, .text: clipboardText = ExtractIntent.csv(headers: table.headers, rows: table.rows)
+            }
+            let cellRects = table.rowCellBoxes.flatMap { $0.compactMap { $0 } } + table.headerCellBoxes.compactMap { $0 }
+            primitives += DrawingOpsBuilder.highlightCells(rects: cellRects)
+            let formatName = request.format == .text ? "csv" : request.format.rawValue
+            spokenText = "copied \(table.rowCount) rows and \(table.columnCount) columns as \(formatName). every cell i used is highlighted."
+            report.metricText = "\(table.rowCount)×\(table.columnCount) · \(formatName) · \(Int(table.extractionConfidence * 100))%"
+        } else if request.format != .text, case let grid = ExtractIntent.grid(from: lines), grid.rows.count >= 2, (grid.rows.first?.count ?? 0) >= 2 {
+            // Looser grid from line boxes when the strict extractor is unsure.
+            switch request.format {
+            case .json: clipboardText = ExtractIntent.json(headers: grid.headers, rows: grid.rows)
+            case .markdown: clipboardText = ExtractIntent.markdown(headers: grid.headers, rows: grid.rows)
+            case .csv, .text: clipboardText = ExtractIntent.csv(headers: grid.headers, rows: grid.rows)
+            }
+            primitives += DrawingOpsBuilder.highlightCells(rects: lines.map(\.boundingBoxInCapturePixels))
+            let columnCount = grid.rows.first?.count ?? 0
+            spokenText = "copied \(grid.rows.count) rows and \(columnCount) columns as \(request.format.rawValue). every cell i used is highlighted."
+            report.metricText = "\(grid.rows.count)×\(columnCount) · \(request.format.rawValue) · grid"
+        } else {
+            let orderedLines = lines.sorted { $0.boundingBoxInCapturePixels.minY < $1.boundingBoxInCapturePixels.minY }
+            let texts = orderedLines.map(\.text)
+            clipboardText = request.format == .json
+                ? (String(data: (try? JSONSerialization.data(withJSONObject: texts, options: [.prettyPrinted])) ?? Data(), encoding: .utf8) ?? texts.joined(separator: "\n"))
+                : texts.joined(separator: "\n")
+            primitives += DrawingOpsBuilder.highlightCells(rects: orderedLines.map(\.boundingBoxInCapturePixels))
+            spokenText = "copied \(texts.count) lines of text."
+            report.metricText = "\(texts.count) lines · text"
+        }
+
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(clipboardText, forType: .string)
+        print("📋 extract: \(clipboardText.count) chars → clipboard (\(request.format.rawValue))")
+        drawingLayerModel.show(primitives, geometry: capture.geometry, autoClearAfterSeconds: 20)
+        try await speak(spokenText)
+    }
+
+    // MARK: - Ink math (spoken)
+
+    private func runInkMath(request: InkMathRequest, screenAnalysis: ScreenAnalysis, report: inout SounderInteractionReport) async throws {
+        report.modeUsed = "Math"
+        report.analysisTask = "math"
+        let capture = screenAnalysis.capture
+        guard let region = screenAnalysis.regionOfInterestInCapturePixels else { return }
+        let lines = screenAnalysis.textLines
+            .filter { $0.boundingBoxInCapturePixels.intersects(region) }
+            .sorted { $0.boundingBoxInCapturePixels.minY < $1.boundingBoxInCapturePixels.minY }
+        var values: [Double] = []
+        var usedLines: [RecognizedTextLine] = []
+        var prefix = "", suffix = "", hadDecimals = false
+        for line in lines {
+            let found = InkMathIntent.numbers(in: line.text)
+            guard !found.isEmpty else { continue }
+            usedLines.append(line)
+            for number in found {
+                if values.isEmpty { prefix = number.prefix; suffix = number.suffix }
+                if number.value != number.value.rounded() { hadDecimals = true }
+                values.append(number.value)
+            }
+        }
+        gesturePathPointsGlobal = []
+        guard !values.isEmpty, let result = InkMathIntent.apply(request.operation, to: values) else {
+            try await speak("i don't see a number in what you circled.")
+            return
+        }
+        let resultText = prefix + InkMathIntent.format(result, decimals: hadDecimals || result != result.rounded() ? 2 : 0) + suffix
+        let firstLine = usedLines[0].boundingBoxInCapturePixels
+        var primitives = regionOutlinePrimitives(region) + DrawingOpsBuilder.highlightCells(rects: usedLines.map(\.boundingBoxInCapturePixels))
+        primitives.append(.badge(id: "math-result", anchorInCapturePixels: CGPoint(x: firstLine.maxX + 4, y: firstLine.midY), text: "= \(resultText)"))
+        drawingLayerModel.show(primitives, geometry: capture.geometry, autoClearAfterSeconds: 30)
+
+        let spokenText: String
+        switch request.operation {
+        case .sum, .average, .maximum, .minimum:
+            spokenText = "\(request.spokenOperation) of those \(values.count) numbers is \(resultText)."
+        default:
+            spokenText = "\(prefix)\(InkMathIntent.format(values[0]))\(suffix) \(request.spokenOperation) is \(resultText)."
+        }
+        report.metricText = "\(values.count) numbers → \(resultText)"
+        print("🧮 math: \(values) \(request.spokenOperation) → \(resultText)")
+        try await speak(spokenText)
+    }
+
+    // MARK: - Dictate into a circled field
+
+    private func runDictate(text: String, screenAnalysis: ScreenAnalysis, report: inout SounderInteractionReport) async throws {
+        report.modeUsed = "Type"
+        report.analysisTask = "type"
+        guard let region = screenAnalysis.regionOfInterestInCapturePixels else { return }
+        let target = screenAnalysis.capture.geometry.globalAppKitPoint(fromCapturePixel: CGPoint(x: region.midX, y: region.midY))
+        gesturePathPointsGlobal = []
+        drawingLayerModel.show(regionOutlinePrimitives(region), geometry: screenAnalysis.capture.geometry, autoClearAfterSeconds: 6)
+        presentCaption("typing…")
+        MacControl.click(atGlobalAppKitPoint: target)
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        MacControl.typeText(text)
+        report.metricText = "typed \(text.count) chars"
+        print("⌨️ dictate: \"\(text)\" at \(Int(target.x)),\(Int(target.y))")
+        try await speak("typed it.")
     }
 
     /// Looks up one paper, image, video or link with web search and holds the card
@@ -1070,11 +1323,33 @@ final class CompanionManager: ObservableObject {
             conversationHistory.removeFirst(conversationHistory.count - 10)
         }
 
-        let highlightPrimitives = DrawingOpsBuilder.highlightElements(answer.highlightedElements) + regionOutlinePrimitives(regionOfInterest)
+        var highlightPrimitives = DrawingOpsBuilder.highlightElements(answer.highlightedElements) + regionOutlinePrimitives(regionOfInterest)
+        // Sketched explanation: numbered arrows between the elements, in order.
+        // A guide keeps its route alive and lights each step as the user clicks it.
+        if answer.routeElements.count >= 2 {
+            if answer.routeKind == "guide" {
+                startGuidedRoute(elements: answer.routeElements, labels: answer.routeLabels, geometry: capture.geometry)
+                report.metricText = "guide · \(answer.routeElements.count) steps"
+                highlightPrimitives = []
+            } else {
+                highlightPrimitives = DrawingOpsBuilder.route(through: answer.routeElements, labels: answer.routeLabels, currentStep: nil) + regionOutlinePrimitives(regionOfInterest)
+                report.metricText = "flow · \(answer.routeElements.count) hops"
+            }
+        }
         if !highlightPrimitives.isEmpty {
-            drawingLayerModel.show(highlightPrimitives, geometry: capture.geometry, autoClearAfterSeconds: 12)
+            drawingLayerModel.show(highlightPrimitives, geometry: capture.geometry, autoClearAfterSeconds: answer.routeElements.count >= 2 ? 75 : 12)
         }
         gesturePathPointsGlobal = []
+
+        // Whiteboard: sketch the concept in the emptiest margin while the answer is spoken.
+        var whiteboardTask: Task<WhiteboardDiagram?, Never>?
+        if answer.wantsWhiteboard {
+            let question = transcript
+            let spokenAnswer = answer.spokenText
+            whiteboardTask = Task { [whiteboardPipeline] in
+                try? await whiteboardPipeline.diagram(for: question, spokenAnswer: spokenAnswer)
+            }
+        }
 
         if let pointedElement = answer.pointedElement {
             // Switch to idle BEFORE setting the location so the triangle is visible and can fly.
@@ -1088,6 +1363,12 @@ final class CompanionManager: ObservableObject {
 
         ClickyAnalytics.trackAIResponseReceived(response: answer.spokenText)
         try await speak(answer.spokenText)
+
+        if let whiteboardTask, let diagram = await whiteboardTask.value {
+            try Task.checkCancellation()
+            showWhiteboard(diagram, elements: elements, geometry: capture.geometry)
+            report.metricText = (report.metricText.map { $0 + " · " } ?? "") + "sketch · \(diagram.nodes.count) boxes"
+        }
 
         // "show me a paper / video / picture of…": look it up and hold the card up.
         if let mediaQuery = answer.mediaQuery {
@@ -1125,7 +1406,7 @@ final class CompanionManager: ObservableObject {
         gesturePathPointsGlobal = []
         report.totalSeconds = Date().timeIntervalSince(startedAt)
         lastInteractionReport = report
-        print("⏱️ \(report.modeUsed) [picker: \(selectedMode.rawValue)]: capture \(String(format: "%.2f", report.captureSeconds))s, ocr \(String(format: "%.2f", report.ocrSeconds))s, plan \(String(format: "%.2f", report.planSeconds))s, analysis \(String(format: "%.2f", report.analysisSeconds))s, total \(String(format: "%.2f", report.totalSeconds))s")
+        print("⏱️ \(report.modeUsed) [picker: \(selectedMode.rawValue)]: capture \(String(format: "%.2f", report.captureSeconds))s, ocr \(String(format: "%.2f", report.ocrSeconds))s, plan \(String(format: "%.2f", report.planSeconds))s, analysis \(String(format: "%.2f", report.analysisSeconds))s, total \(String(format: "%.2f", report.totalSeconds))s\(report.metricText.map { " · \($0)" } ?? "")")
     }
 
     private static func spokenErrorMessage(for error: Error) -> String {
@@ -1225,15 +1506,45 @@ final class CompanionManager: ObservableObject {
 
     private func beginGestureSampling() {
         gestureSamplingTimer?.invalidate()
+        gestureTrailFadeTimer?.invalidate()
+        gestureTrailFadeTimer = nil
         gesturePathPointsGlobal = []
+        gestureTrailPoints = []
         pendingGestureBoundsGlobal = nil
         gestureSamplingTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 let location = NSEvent.mouseLocation
-                self.noteCursorForDwell(location, now: Date())
+                let now = Date()
+                self.noteCursorForDwell(location, now: now)
+                self.pruneGestureTrail(now: now)
                 if let last = self.gesturePathPointsGlobal.last, hypot(location.x - last.x, location.y - last.y) < 1.5 { return }
                 self.gesturePathPointsGlobal.append(location)
+                self.gestureTrailPoints.append(GestureTrailPoint(position: location, time: now.timeIntervalSinceReferenceDate))
+            }
+        }
+    }
+
+    private func pruneGestureTrail(now: Date) {
+        let cutoff = now.timeIntervalSinceReferenceDate - Self.gestureTrailLifetime
+        if let firstLive = gestureTrailPoints.firstIndex(where: { $0.time >= cutoff }) {
+            if firstLive > 0 { gestureTrailPoints.removeFirst(firstLive) }
+        } else if !gestureTrailPoints.isEmpty {
+            gestureTrailPoints = []
+        }
+    }
+
+    /// After release the trail keeps fading on its own until nothing is left.
+    private func startGestureTrailFadeOut() {
+        gestureTrailFadeTimer?.invalidate()
+        gestureTrailFadeTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] timer in
+            Task { @MainActor [weak self] in
+                guard let self else { timer.invalidate(); return }
+                self.pruneGestureTrail(now: Date())
+                if self.gestureTrailPoints.isEmpty {
+                    timer.invalidate()
+                    self.gestureTrailFadeTimer = nil
+                }
             }
         }
     }
@@ -1241,6 +1552,7 @@ final class CompanionManager: ObservableObject {
     private func endGestureSampling() {
         gestureSamplingTimer?.invalidate()
         gestureSamplingTimer = nil
+        startGestureTrailFadeOut()
         guard gesturePathPointsGlobal.count >= 8 else {
             gesturePathPointsGlobal = []
             pendingGestureBoundsGlobal = nil

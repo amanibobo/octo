@@ -193,6 +193,57 @@ struct DrawingLayerView: View {
                     .position(x: apex.x, y: apex.y)
             }
 
+        case .arrow(let id, let fromRectInCapturePixels, let toRectInCapturePixels, _, let label, let color, let emphasis):
+            let fromRect = geometry.overlayRect(fromCapturePixelRect: fromRectInCapturePixels)
+            let toRect = geometry.overlayRect(fromCapturePixelRect: toRectInCapturePixels)
+            let start = Self.edgePoint(of: fromRect.insetBy(dx: -6, dy: -4), toward: CGPoint(x: toRect.midX, y: toRect.midY))
+            let end = Self.edgePoint(of: toRect.insetBy(dx: -8, dy: -6), toward: CGPoint(x: fromRect.midX, y: fromRect.midY))
+            let delta = CGPoint(x: end.x - start.x, y: end.y - start.y)
+            let length = max(1, hypot(delta.x, delta.y))
+            // Bow the arrow a little to one side so a chain of hops reads as a path, not a line.
+            let normal = CGPoint(x: -delta.y / length, y: delta.x / length)
+            let bulge = min(60, length * 0.18)
+            let control = CGPoint(x: (start.x + end.x) / 2 + normal.x * bulge, y: (start.y + end.y) / 2 + normal.y * bulge)
+            let apex = CGPoint(x: 0.25 * start.x + 0.5 * control.x + 0.25 * end.x, y: 0.25 * start.y + 0.5 * control.y + 0.25 * end.y)
+            let tangent = CGPoint(x: end.x - control.x, y: end.y - control.y)
+            let tangentLength = max(1, hypot(tangent.x, tangent.y))
+            let direction = CGPoint(x: tangent.x / tangentLength, y: tangent.y / tangentLength)
+            let arrowSize: CGFloat = emphasis == 2 ? 13 : 10
+            let strokeOpacity = emphasis == 0 ? 0.45 : (emphasis == 2 ? 1.0 : 0.8)
+            let lineWidth: CGFloat = emphasis == 2 ? 3.5 : 2.5
+            RoughLineShape(seed: id, from: start, to: end)
+                .trim(from: 0, to: model.drawProgress)
+                .stroke(swiftUIColor(color).opacity(0.001), lineWidth: 0.1) // keeps the seed stable; real stroke below
+            Path { path in
+                path.move(to: start)
+                path.addQuadCurve(to: end, control: control)
+            }
+            .trim(from: 0, to: model.drawProgress)
+            .stroke(swiftUIColor(color).opacity(strokeOpacity), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+            .shadow(color: swiftUIColor(color).opacity(emphasis == 2 ? 0.7 : 0.35), radius: emphasis == 2 ? 6 : 3)
+            if model.drawProgress > 0.95 {
+                Path { path in
+                    let tip = end
+                    let base = CGPoint(x: tip.x - direction.x * arrowSize, y: tip.y - direction.y * arrowSize)
+                    let side = CGPoint(x: -direction.y * arrowSize * 0.55, y: direction.x * arrowSize * 0.55)
+                    path.move(to: tip)
+                    path.addLine(to: CGPoint(x: base.x + side.x, y: base.y + side.y))
+                    path.addLine(to: CGPoint(x: base.x - side.x, y: base.y - side.y))
+                    path.closeSubpath()
+                }
+                .fill(swiftUIColor(color).opacity(strokeOpacity))
+            }
+            if let label, !label.isEmpty, model.drawProgress > 0.6 {
+                Text(label)
+                    .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(Color.black.opacity(0.8)).overlay(Capsule().stroke(swiftUIColor(color).opacity(0.8), lineWidth: 1)))
+                    .fixedSize()
+                    .position(x: apex.x, y: apex.y)
+            }
+
         case .underline(let id, let rectInCapturePixels, let color):
             let rect = geometry.overlayRect(fromCapturePixelRect: rectInCapturePixels)
             RoughLineShape(seed: id, from: CGPoint(x: rect.minX - 3, y: rect.maxY + 2), to: CGPoint(x: rect.maxX + 3, y: rect.maxY + 2))
@@ -227,6 +278,16 @@ struct DrawingLayerView: View {
         let clipRect = clipRectInCapturePixels.map { geometry.overlayRect(fromCapturePixelRect: $0) }
             ?? CGRect(origin: .zero, size: CGSize(width: screenFrame.width, height: screenFrame.height))
         return Rectangle().path(in: clipRect)
+    }
+
+    /// Where a line from the rect's centre toward `target` leaves the rect.
+    private static func edgePoint(of rect: CGRect, toward target: CGPoint) -> CGPoint {
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        let dx = target.x - center.x, dy = target.y - center.y
+        guard dx != 0 || dy != 0 else { return center }
+        let halfWidth = rect.width / 2, halfHeight = rect.height / 2
+        let scale = min(halfWidth / max(abs(dx), 0.001), halfHeight / max(abs(dy), 0.001))
+        return CGPoint(x: center.x + dx * scale, y: center.y + dy * scale)
     }
 
     private func swiftUIColor(_ color: DrawingColor) -> Color {

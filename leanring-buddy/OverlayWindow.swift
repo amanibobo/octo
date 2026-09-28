@@ -104,6 +104,48 @@ struct BuddySquareSpriteView: View {
     }
 }
 
+/// Comet-style trail: consecutive points joined by segments whose opacity and
+/// width decay with age. Drawn in a Canvas on an animation timeline so the fade
+/// runs smoothly between samples.
+struct GestureTrailView: View {
+    let points: [GestureTrailPoint]
+    let lifetime: TimeInterval
+    let screenFrame: CGRect
+    let convert: (CGPoint) -> CGPoint
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
+            let now = context.date.timeIntervalSinceReferenceDate
+            Canvas { graphicsContext, _ in
+                let visible = points.filter { screenFrame.contains($0.position) }
+                guard visible.count >= 2 else { return }
+                let core = Color(red: 0x4a/255, green: 0xde/255, blue: 0x80/255)
+                for index in 1..<visible.count {
+                    let previous = visible[index - 1]
+                    let current = visible[index]
+                    let age = now - current.time
+                    let life = max(0, min(1, 1 - age / lifetime))
+                    guard life > 0.01 else { continue }
+                    let strength = pow(life, 1.4)
+                    var segment = Path()
+                    segment.move(to: convert(previous.position))
+                    segment.addLine(to: convert(current.position))
+                    // Soft glow underneath, bright core on top.
+                    graphicsContext.stroke(segment, with: .color(core.opacity(0.35 * strength)),
+                                           style: StrokeStyle(lineWidth: 4 + 10 * strength, lineCap: .round, lineJoin: .round))
+                    graphicsContext.stroke(segment, with: .color(core.opacity(0.95 * strength)),
+                                           style: StrokeStyle(lineWidth: 1.5 + 3.5 * strength, lineCap: .round, lineJoin: .round))
+                }
+                // Hot head right behind the cursor.
+                if let head = visible.last, now - head.time < 0.3 {
+                    let center = convert(head.position)
+                    graphicsContext.fill(Path(ellipseIn: CGRect(x: center.x - 4, y: center.y - 4, width: 8, height: 8)), with: .color(core.opacity(0.9)))
+                }
+            }
+        }
+    }
+}
+
 // Cursor-like triangle shape (equilateral) — kept for reference/menu icon parity.
 struct Triangle: Shape {
     func path(in rect: CGRect) -> Path {
@@ -247,19 +289,13 @@ struct BlueCursorView: View {
             // highlights). Rendered beneath the cursor so the buddy stays on top.
             DrawingLayerView(model: companionManager.drawingLayerModel, screenFrame: screenFrame)
 
-            // Spatial context: the path the user traces while holding the hotkey.
-            if companionManager.gesturePathPointsGlobal.count >= 2 {
-                Path { path in
-                    let points = companionManager.gesturePathPointsGlobal
-                        .filter { screenFrame.contains($0) }
-                        .map { convertScreenPointToSwiftUICoordinates($0) }
-                    guard let first = points.first else { return }
-                    path.move(to: first)
-                    for point in points.dropFirst() { path.addLine(to: point) }
-                }
-                .stroke(DS.Colors.overlayCursorBlue.opacity(0.9), style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round, dash: [7, 5]))
-                .shadow(color: DS.Colors.overlayCursorBlue.opacity(0.6), radius: 4)
-                .allowsHitTesting(false)
+            // Spatial context: a comet trail behind the cursor while the hotkey is
+            // held. Each segment fades and thins with age, so the trail drags a
+            // little behind the pointer and dissolves on its own.
+            if companionManager.gestureTrailPoints.count >= 2 {
+                GestureTrailView(points: companionManager.gestureTrailPoints, lifetime: CompanionManager.gestureTrailLifetime,
+                                 screenFrame: screenFrame, convert: convertScreenPointToSwiftUICoordinates)
+                    .allowsHitTesting(false)
             }
 
             // Welcome speech bubble (first launch only)

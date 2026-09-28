@@ -66,6 +66,14 @@ Worker vars: `FIREWORKS_CHAT_MODEL`, `FIREWORKS_TRANSCRIPTION_MODEL`, `ELEVENLAB
 
 **Debug hook** (DEBUG builds only): a question written to `~/Library/Logs/Sounder/ask.txt` runs as if spoken (typed-question watcher in `CompanionManager`), which is how rewind and any mode are exercised without a microphone.
 
+**Gesture trail**: while the hotkey is held, `gestureTrailPoints` (timestamped) feed `GestureTrailView`, a Canvas on an animation timeline that draws each segment with opacity/width decaying over `gestureTrailLifetime` (1.1 s); points are pruned every tick and keep fading after release. The raw `gesturePathPointsGlobal` still defines the circled region.
+
+**Quick intents on a circled region** (`QuickIntents.swift`, no model call): `DictateIntent` ("type …") clicks the region and types; `InkMathIntent` ("times 1.2", "plus 15 percent", "sum these") computes on the numbers inside and draws a `= result` badge; `ExtractIntent` ("copy this table as csv/json/markdown") copies the region to the clipboard, using `TableExtractor` when confident and otherwise `ExtractIntent.grid` (word boxes → row clusters + x-band columns), with every used cell highlighted. Routed before media/agent in `performInteraction`.
+
+**Routes and whiteboard (General mode)**: the answer schema carries `route_element_ids`/`route_labels`/`route_kind` (`flow` draws numbered `.arrow` primitives between elements via `DrawingOpsBuilder.route`; `guide` starts a guided path that lights each step as the user clicks it, using global/local mouse monitors) and `sketch_diagram` (conceptual questions → `WhiteboardPipeline` returns a node/edge JSON, `WhiteboardPanelManager` lays it out in layers and sketches it in the emptiest margin, wiped on the next hotkey or after 50 s).
+
+**Glass cards**: `GlassCardBackground` (system `glassEffect` on macOS 26, `NSVisualEffectView` blur below) backs the rewind card.
+
 **Cursor Overlay**: A full-screen transparent `NSPanel` hosts the blue cursor companion. It's non-activating, joins all Spaces, and never steals focus. The cursor position, response text, waveform, and pointing animations all render in this overlay via SwiftUI through `NSHostingView`.
 
 **Global Push-To-Talk Shortcut**: Background push-to-talk uses a listen-only `CGEvent` tap instead of an AppKit global monitor so modifier-based shortcuts like `ctrl + option` are detected more reliably while the app is running in the background. The chord is a user-recordable `PushToTalkChord` (modifiers, optionally plus one key; persisted as JSON under `octoPushToTalkChord`, legacy preset key migrated). Settings › Hotkey has a Record button: the same tap enters a recording mode (`beginRecordingChord`) and finishes on keyDown (modifiers + key) or when every modifier is released (modifier-only chord); Esc, an invalid chord or 10 s cancels. Presets remain as pills.
@@ -100,7 +108,10 @@ Worker vars: `FIREWORKS_CHAT_MODEL`, `FIREWORKS_TRANSCRIPTION_MODEL`, `ELEVENLAB
 | `Notch/NotchModeVignetteView.swift` | ~190 | Animated per-mode "Octo in use" scene drawn in a Canvas. |
 | `Sounder/Rewind/ScreenHistoryRecorder.swift` | ~280 | Rolling in-memory frame + OCR buffer, change detection, keyword/embedding search. |
 | `Sounder/Rewind/RewindIntent.swift` | ~60 | "…five minutes ago" / "what did that say" detection and time parsing. |
-| `Sounder/Rewind/RewindPanelManager.swift` | ~260 | Rewind card: frame with highlighted lines, scrub bar, Esc/close. |
+| `Sounder/Rewind/RewindPanelManager.swift` | ~300 | Rewind card (glass): frame with highlighted lines, scrub bar, Esc/close; `GlassCardBackground`. |
+| `Sounder/Router/QuickIntents.swift` | ~300 | Dictate / ink-math / extract intents, CSV·JSON·markdown builders, word-box grid. |
+| `Sounder/Router/WhiteboardPipeline.swift` | ~80 | Conceptual question → node/edge diagram JSON. |
+| `Sounder/Overlay/WhiteboardPanelManager.swift` | ~240 | Layered layout + sketched rendering of the diagram in a free margin. |
 | `api/proxy.ts`, `vercel.json`, `.vercelignore` (repo root) | ~20 | Root Vercel entry so GitHub-triggered deploys (from the repo root) serve the same proxy as `worker/`. |
 | `Sounder/Context/UserContextStore.swift` | ~270 | Persisted notes/links/images + `promptBundle()` for the pipelines. |
 | `CompanionPanelView.swift` | ~560 | Panel UI: permissions, Start, mode picker (Auto/General/Data), service status, last-run latency/confidence readout, options (clipboard fallback, offline voice, show cursor, calibrate). |

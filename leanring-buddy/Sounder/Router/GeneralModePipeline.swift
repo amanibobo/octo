@@ -21,6 +21,13 @@ final class GeneralModePipeline {
         /// A web search query when the user asked to see a paper, image, video or link.
         let mediaQuery: String?
         let mediaKind: MediaCard.Kind?
+        /// Elements in order, when the user asked how something flows or how to do a multi-step thing here.
+        let routeElements: [ScreenElement]
+        let routeLabels: [String]
+        /// "flow" (explain the order) or "guide" (steps the user will click through).
+        let routeKind: String?
+        /// True when the question is conceptual and a small diagram in the margin would help.
+        let wantsWhiteboard: Bool
     }
 
     private let chatClient: any ChatModelClient
@@ -37,6 +44,10 @@ final class GeneralModePipeline {
 
     the screenshot has numbered red tags. each tag is an element id from the list you are given. point (point_element_id + a 1-3 word point_label) only when the user is asking where something is, how to do something, or what to click, and the thing is on screen. for descriptive questions ("what do you see", "what is this") return null and do not point. you may also return a few highlight_element_ids to light up related text. only use ids from the list.
 
+    routes: if the user asks how something flows, moves or connects on this screen, or what order things happen in ("how does the data flow here?", "walk me through this"), you must put the element ids in order in route_element_ids (2 to 8, pick the labelled boxes, headings or buttons that make the best stops even if the ids are small text), a 1-4 word label per hop in route_labels, and route_kind "flow"; narrate the hops in order in speak. never answer a walkthrough question with an empty route while there are elements on screen. if they ask how to do a multi-step thing on this screen themselves ("show me how to…", "where do i click to…", "what are the steps to…"), do the same with route_kind "guide": the ids are the things they will click in order, labels say what each click does, and speak tells them to follow the numbers. otherwise leave route_element_ids empty and route_kind null.
+
+    sketch_diagram: set true only when the question is conceptual rather than about what is on screen (how something works in general, a comparison, a process), so a small diagram in the margin would help. otherwise false.
+
     if the user asks you to show, find, pull up or bring up a paper, study, article, image, picture, diagram, video or link about something, set media_query to a precise web search query for it and media_kind to paper, image, video or link; you will hold the result up next to you, so say something like "here's one" in speak. otherwise leave both null.
     """
 
@@ -48,9 +59,13 @@ final class GeneralModePipeline {
             "point_label": ["type": ["string", "null"]],
             "highlight_element_ids": ["type": "array", "items": ["type": "integer"]],
             "media_query": ["type": ["string", "null"]],
-            "media_kind": ["type": ["string", "null"], "enum": ["paper", "image", "video", "link", NSNull()]]
+            "media_kind": ["type": ["string", "null"], "enum": ["paper", "image", "video", "link", NSNull()]],
+            "route_element_ids": ["type": "array", "items": ["type": "integer"]],
+            "route_labels": ["type": "array", "items": ["type": "string"]],
+            "route_kind": ["type": ["string", "null"], "enum": ["flow", "guide", NSNull()]],
+            "sketch_diagram": ["type": "boolean"]
         ],
-        "required": ["speak", "point_element_id", "point_label", "highlight_element_ids", "media_query", "media_kind"]
+        "required": ["speak", "point_element_id", "point_label", "highlight_element_ids", "media_query", "media_kind", "route_element_ids", "route_labels", "route_kind", "sketch_diagram"]
     ]
 
     func answer(
@@ -130,13 +145,25 @@ final class GeneralModePipeline {
 
         let mediaQuery = (responseObject["media_query"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let mediaKind = (responseObject["media_kind"] as? String).flatMap { MediaCard.Kind(rawValue: $0) }
+        let routeIDs = (responseObject["route_element_ids"] as? [Int]) ?? []
+        var routeElements: [ScreenElement] = []
+        var seenRouteIDs = Set<Int>()
+        for id in routeIDs where seenRouteIDs.insert(id).inserted {
+            if let element = elementsByID[id] { routeElements.append(element) }
+        }
+        let routeLabels = (responseObject["route_labels"] as? [String]) ?? []
+        let routeKind = routeElements.count >= 2 ? (responseObject["route_kind"] as? String) : nil
         return Answer(
             spokenText: spokenText.isEmpty ? "i didn't catch a question in that." : spokenText,
             pointedElement: pointedElement,
             pointLabel: pointLabel,
             highlightedElements: Array(highlightedElements.prefix(6)),
             mediaQuery: (mediaQuery?.isEmpty ?? true) ? nil : mediaQuery,
-            mediaKind: mediaKind
+            mediaKind: mediaKind,
+            routeElements: Array(routeElements.prefix(8)),
+            routeLabels: routeLabels,
+            routeKind: routeKind,
+            wantsWhiteboard: (responseObject["sketch_diagram"] as? Bool) ?? false
         )
     }
 }
