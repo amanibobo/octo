@@ -93,8 +93,8 @@ struct NotchPanelContentView: View {
         case .processing: return "Thinking…"
         case .responding: return "Speaking"
         case .idle:
-            if !companionManager.isOverlayVisible { return "Ready · hold \(companionManager.pushToTalkShortcut.displayText)" }
-            return "Watching your screen · hold \(companionManager.pushToTalkShortcut.displayText)"
+            if !companionManager.isOverlayVisible { return "Ready" }
+            return "Watching your screen"
         }
     }
 

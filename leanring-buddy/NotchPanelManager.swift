@@ -50,7 +50,7 @@ final class NotchPanelManager {
     private var notificationObservers: [NSObjectProtocol] = []
 
     /// Transparent canvas the island is drawn in; large enough for the expanded card.
-    private static let canvasSize = CGSize(width: 640, height: 720)
+    private static let canvasSize = CGSize(width: 640, height: 940)
     /// Brief dwell so sweeping the pointer across the top edge does not open the island.
     private static let hoverExpandDelay: TimeInterval = 0.10
     private static let hoverCollapseDelay: TimeInterval = 0.55

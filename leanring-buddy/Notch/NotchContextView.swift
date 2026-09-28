@@ -17,41 +17,56 @@ struct NotchContextView: View {
     @State private var isDropTargeted = false
     @FocusState private var isInputFocused: Bool
 
-    private let horizontalPadding: CGFloat = 28
+    private let horizontalPadding: CGFloat = 22
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-                .padding(.horizontal, horizontalPadding)
-                .padding(.top, 14)
-                .padding(.bottom, 12)
+        VStack(alignment: .leading, spacing: 12) {
+            NotchPageHeader(title: "Context", subtitle: "What Octo keeps in mind for every answer", onBack: onBack) {
+                if !userContextStore.items.isEmpty {
+                    NotchPillButton(title: "Clear all", systemImage: "trash") { userContextStore.clear() }
+                }
+            }
+            .padding(.top, 14)
 
             if userContextStore.items.isEmpty {
-                Text("Pin what you're working on: a note, a link, or an image. Octo keeps it in mind for every answer.")
-                    .font(.system(size: 12.5))
-                    .foregroundColor(.white.opacity(0.5))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, horizontalPadding)
-                    .padding(.bottom, 14)
+                emptyState
             } else {
                 itemList
-                    .padding(.horizontal, horizontalPadding - 8)
-                    .padding(.bottom, 10)
             }
 
-            inputRow
-                .padding(.horizontal, horizontalPadding)
-                .padding(.bottom, 10)
-
-            actionRow
-                .padding(.horizontal, horizontalPadding)
-                .padding(.bottom, 16)
+            NotchSectionCard(title: "Add", systemImage: "plus") {
+                VStack(alignment: .leading, spacing: 10) {
+                    inputRow
+                    HStack(spacing: 8) {
+                        NotchPillButton(title: "Paste", systemImage: "doc.on.clipboard") {
+                            if !userContextStore.addFromPasteboard() { NSSound.beep() }
+                        }
+                        NotchPillButton(title: "Image…", systemImage: "photo") { chooseImageFiles() }
+                        if userContextStore.isFetchingLink {
+                            ProgressView().controlSize(.small).padding(.leading, 2)
+                            Text("fetching link…")
+                                .font(.system(size: 11))
+                                .foregroundColor(.white.opacity(0.4))
+                        }
+                        Spacer()
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.down.doc")
+                                .font(.system(size: 10, weight: .medium))
+                            Text("or drop files here")
+                                .font(.system(size: 11))
+                        }
+                        .foregroundColor(isDropTargeted ? DS.Colors.overlayCursorBlue : .white.opacity(0.35))
+                    }
+                }
+            }
+            .padding(.bottom, 16)
         }
+        .padding(.horizontal, horizontalPadding)
         .frame(width: NotchIslandState.expandedWidth)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(DS.Colors.overlayCursorBlue.opacity(isDropTargeted ? 0.9 : 0), lineWidth: 2)
-                .padding(6)
+                .padding(8)
         )
         .onDrop(of: [.fileURL, .url, .image, .plainText], isTargeted: $isDropTargeted) { providers in
             handleDrop(providers)
@@ -60,48 +75,39 @@ struct NotchContextView: View {
 
     // MARK: - Pieces
 
-    private var header: some View {
-        HStack(spacing: 10) {
-            Button(action: onBack) {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.7))
-                    .frame(width: 24, height: 24)
-                    .background(Circle().fill(Color.white.opacity(0.08)))
-            }
-            .buttonStyle(.plain)
-            .pointerCursor()
-            Text("Context")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(.white)
-            if !userContextStore.items.isEmpty {
-                Text("\(userContextStore.items.count)")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundColor(.black)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2)
-                    .background(Capsule().fill(DS.Colors.overlayCursorBlue))
-            }
-            Spacer()
-            if !userContextStore.items.isEmpty {
-                Button("Clear all") { userContextStore.clear() }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 11.5, weight: .medium))
-                    .foregroundColor(.white.opacity(0.5))
-                    .pointerCursor()
+    private var emptyState: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "paperclip.circle.fill")
+                .font(.system(size: 26))
+                .foregroundColor(DS.Colors.overlayCursorBlue.opacity(0.85))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Nothing pinned yet")
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundColor(.white.opacity(0.9))
+                Text("Pin a note, a link or an image about what you're working on. Octo folds it into every answer.")
+                    .font(.system(size: 11.5))
+                    .foregroundColor(.white.opacity(0.45))
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.white.opacity(0.04))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [4, 4])).foregroundColor(.white.opacity(0.14)))
+        )
     }
 
     private var itemList: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(spacing: 2) {
+            VStack(spacing: 4) {
                 ForEach(userContextStore.items) { item in
                     contextRow(item)
                 }
             }
         }
-        .frame(maxHeight: 190)
+        .frame(maxHeight: 196)
     }
 
     private func contextRow(_ item: UserContextItem) -> some View {
@@ -110,18 +116,24 @@ struct NotchContextView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.title)
                     .font(.system(size: 12.5, weight: .medium))
-                    .foregroundColor(.white.opacity(0.9))
+                    .foregroundColor(.white.opacity(0.92))
                     .lineLimit(1)
                 Text(subtitle(for: item))
                     .font(.system(size: 11))
-                    .foregroundColor(.white.opacity(0.4))
+                    .foregroundColor(.white.opacity(0.42))
                     .lineLimit(1)
             }
             Spacer(minLength: 4)
+            Text(item.kind.rawValue)
+                .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                .foregroundColor(DS.Colors.overlayCursorBlue)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Capsule().fill(DS.Colors.overlayCursorBlue.opacity(0.14)))
             Button(action: { userContextStore.remove(item) }) {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .bold))
-                    .foregroundColor(.white.opacity(0.5))
+                    .foregroundColor(.white.opacity(0.55))
                     .frame(width: 20, height: 20)
                     .background(Circle().fill(Color.white.opacity(0.08)))
             }
@@ -129,9 +141,13 @@ struct NotchContextView: View {
             .pointerCursor()
             .help("Remove")
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(0.05)))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.white.opacity(0.06), lineWidth: 1))
+        )
     }
 
     @ViewBuilder
@@ -140,14 +156,14 @@ struct NotchContextView: View {
             Image(nsImage: image)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
-                .frame(width: 30, height: 30)
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .frame(width: 32, height: 32)
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         } else {
             Image(systemName: item.kind == .link ? "link" : "text.alignleft")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(DS.Colors.overlayCursorBlue)
-                .frame(width: 30, height: 30)
-                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.white.opacity(0.06)))
+                .frame(width: 32, height: 32)
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(DS.Colors.overlayCursorBlue.opacity(0.12)))
         }
     }
 
@@ -167,55 +183,17 @@ struct NotchContextView: View {
                 .foregroundColor(.white)
                 .focused($isInputFocused)
                 .onSubmit { submitDraft() }
-                .padding(.horizontal, 10)
+                .padding(.horizontal, 11)
                 .padding(.vertical, 8)
-                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(0.08)))
-            Button(action: submitDraft) {
-                Text("Add")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(draftInput.isEmpty ? .white.opacity(0.35) : .black)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Capsule().fill(draftInput.isEmpty ? Color.white.opacity(0.08) : DS.Colors.overlayCursorBlue))
-            }
-            .buttonStyle(.plain)
-            .pointerCursor()
-            .disabled(draftInput.isEmpty)
+                .background(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(Color.black.opacity(0.35))
+                        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(Color.white.opacity(isInputFocused ? 0.18 : 0.08), lineWidth: 1))
+                )
+            NotchPillButton(title: "Add", isProminent: !draftInput.isEmpty) { submitDraft() }
+                .disabled(draftInput.isEmpty)
+                .opacity(draftInput.isEmpty ? 0.6 : 1)
         }
-    }
-
-    private var actionRow: some View {
-        HStack(spacing: 8) {
-            actionButton(icon: "doc.on.clipboard", label: "Paste") {
-                if !userContextStore.addFromPasteboard() { NSSound.beep() }
-            }
-            actionButton(icon: "photo", label: "Image…") { chooseImageFiles() }
-            if userContextStore.isFetchingLink {
-                ProgressView().controlSize(.small).padding(.leading, 4)
-                Text("fetching link…")
-                    .font(.system(size: 11))
-                    .foregroundColor(.white.opacity(0.4))
-            }
-            Spacer()
-            Text("or drop files here")
-                .font(.system(size: 11))
-                .foregroundColor(.white.opacity(0.35))
-        }
-    }
-
-    private func actionButton(icon: String, label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 5) {
-                Image(systemName: icon).font(.system(size: 11, weight: .medium))
-                Text(label).font(.system(size: 11.5, weight: .medium))
-            }
-            .foregroundColor(.white.opacity(0.8))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(Capsule().fill(Color.white.opacity(0.08)))
-        }
-        .buttonStyle(.plain)
-        .pointerCursor()
     }
 
     // MARK: - Actions
@@ -227,7 +205,7 @@ struct NotchContextView: View {
     }
 
     /// The island is a non-activating panel, so the app is activated for the
-    /// duration of the file dialog; the island stays open because the settings
+    /// duration of the file dialog; the island stays open because the inner
     /// pages do not collapse on hover-out.
     private func chooseImageFiles() {
         NSApp.activate(ignoringOtherApps: true)
