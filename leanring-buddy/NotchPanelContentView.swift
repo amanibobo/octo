@@ -223,7 +223,7 @@ struct NotchPanelContentView: View {
     private var footer: some View {
         HStack(spacing: 6) {
             HStack(spacing: 4) {
-                ForEach(companionManager.pushToTalkShortcut.keyCapsuleLabels, id: \.self) { keyLabel in
+                ForEach(companionManager.pushToTalkChord.keyCapsuleLabels, id: \.self) { keyLabel in
                     Text(keyLabel)
                         .font(.system(size: 10.5, weight: .medium, design: .rounded))
                         .foregroundColor(.white.opacity(0.75))

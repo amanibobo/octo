@@ -12,6 +12,39 @@ struct NotchSettingsView: View {
     let onBack: () -> Void
 
     private let horizontalPadding: CGFloat = 22
+    @State private var isRecordingPulseOn = false
+
+    /// Key caps of the current chord; pulses while a new one is being recorded.
+    private var hotkeyDisplay: some View {
+        HStack(spacing: 5) {
+            if companionManager.isRecordingHotkey {
+                Text("listening…")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundColor(DS.Colors.overlayCursorBlue)
+                    .opacity(isRecordingPulseOn ? 1 : 0.45)
+                    .onAppear {
+                        withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) { isRecordingPulseOn = true }
+                    }
+                    .onDisappear { isRecordingPulseOn = false }
+            } else {
+                ForEach(Array(companionManager.pushToTalkChord.keyCapsuleLabels.enumerated()), id: \.offset) { index, keyLabel in
+                    if index > 0 {
+                        Text("+").font(.system(size: 11, weight: .medium)).foregroundColor(.white.opacity(0.35))
+                    }
+                    Text(keyLabel)
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundColor(.white.opacity(0.9))
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 5)
+                        .background(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(Color.white.opacity(0.1))
+                                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(Color.white.opacity(0.1), lineWidth: 1))
+                        )
+                }
+            }
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -19,14 +52,25 @@ struct NotchSettingsView: View {
                 .padding(.top, 14)
 
             NotchSectionCard(title: "Hotkey", systemImage: "keyboard") {
-                VStack(alignment: .leading, spacing: 9) {
-                    Text("Hold to talk, release to send. Circle with the cursor to focus a question.")
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 10) {
+                        hotkeyDisplay
+                        Spacer()
+                        if companionManager.isRecordingHotkey {
+                            NotchPillButton(title: "Cancel", systemImage: "xmark") { companionManager.cancelRecordingHotkey() }
+                        } else {
+                            NotchPillButton(title: "Record", systemImage: "record.circle", isProminent: true) { companionManager.beginRecordingHotkey() }
+                        }
+                    }
+                    Text(companionManager.isRecordingHotkey
+                         ? "Press the keys you want, then let go. Modifiers alone, or modifiers plus one key. Esc cancels."
+                         : "Hold to talk, release to send. Record your own chord, or pick a preset.")
                         .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.42))
+                        .foregroundColor(companionManager.isRecordingHotkey ? DS.Colors.overlayCursorBlue.opacity(0.9) : .white.opacity(0.42))
                         .fixedSize(horizontal: false, vertical: true)
                     HStack(spacing: 5) {
                         ForEach(BuddyPushToTalkShortcut.ShortcutOption.allCases, id: \.self) { option in
-                            NotchPillButton(title: option.displayText, isSelected: companionManager.pushToTalkShortcut == option) {
+                            NotchPillButton(title: option.displayText, isSelected: companionManager.pushToTalkChord == option.chord) {
                                 companionManager.setPushToTalkShortcut(option)
                             }
                         }

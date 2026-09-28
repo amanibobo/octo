@@ -215,12 +215,44 @@ final class CompanionManager: ObservableObject {
 
     /// Push-to-talk chord. Stored on BuddyPushToTalkShortcut (read by the event tap
     /// on every event) and mirrored here so the settings UI can observe it.
-    @Published private(set) var pushToTalkShortcut: BuddyPushToTalkShortcut.ShortcutOption = BuddyPushToTalkShortcut.currentShortcutOption
+    @Published private(set) var pushToTalkChord: PushToTalkChord = BuddyPushToTalkShortcut.currentChord
+    @Published private(set) var isRecordingHotkey = false
+    private var hotkeyRecordingTimeoutTask: Task<Void, Never>?
+
+    func setPushToTalkChord(_ chord: PushToTalkChord) {
+        guard chord.isValid else { return }
+        BuddyPushToTalkShortcut.currentChord = chord
+        pushToTalkChord = chord
+        print("⌨️ push-to-talk chord → \(chord.displayText)")
+    }
 
     func setPushToTalkShortcut(_ shortcutOption: BuddyPushToTalkShortcut.ShortcutOption) {
-        BuddyPushToTalkShortcut.currentShortcutOption = shortcutOption
-        pushToTalkShortcut = shortcutOption
-        print("⌨️ push-to-talk shortcut → \(shortcutOption.displayText)")
+        setPushToTalkChord(shortcutOption.chord)
+    }
+
+    /// Records the next chord the user presses (modifiers, optionally plus one key).
+    /// Esc or ten seconds of nothing cancels.
+    func beginRecordingHotkey() {
+        guard !isRecordingHotkey else { return }
+        isRecordingHotkey = true
+        hotkeyRecordingTimeoutTask?.cancel()
+        hotkeyRecordingTimeoutTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.globalPushToTalkShortcutMonitor.cancelRecordingChord()
+        }
+        globalPushToTalkShortcutMonitor.beginRecordingChord { [weak self] chord in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.hotkeyRecordingTimeoutTask?.cancel()
+                self.isRecordingHotkey = false
+                if let chord { self.setPushToTalkChord(chord) } else { print("⌨️ hotkey recording cancelled") }
+            }
+        }
+    }
+
+    func cancelRecordingHotkey() {
+        globalPushToTalkShortcutMonitor.cancelRecordingChord()
     }
 
     /// Whether spoken answers are also shown as a caption beside the buddy.

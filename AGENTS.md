@@ -68,7 +68,7 @@ Worker vars: `FIREWORKS_CHAT_MODEL`, `FIREWORKS_TRANSCRIPTION_MODEL`, `ELEVENLAB
 
 **Cursor Overlay**: A full-screen transparent `NSPanel` hosts the blue cursor companion. It's non-activating, joins all Spaces, and never steals focus. The cursor position, response text, waveform, and pointing animations all render in this overlay via SwiftUI through `NSHostingView`.
 
-**Global Push-To-Talk Shortcut**: Background push-to-talk uses a listen-only `CGEvent` tap instead of an AppKit global monitor so modifier-based shortcuts like `ctrl + option` are detected more reliably while the app is running in the background.
+**Global Push-To-Talk Shortcut**: Background push-to-talk uses a listen-only `CGEvent` tap instead of an AppKit global monitor so modifier-based shortcuts like `ctrl + option` are detected more reliably while the app is running in the background. The chord is a user-recordable `PushToTalkChord` (modifiers, optionally plus one key; persisted as JSON under `octoPushToTalkChord`, legacy preset key migrated). Settings › Hotkey has a Record button: the same tap enters a recording mode (`beginRecordingChord`) and finishes on keyDown (modifiers + key) or when every modifier is released (modifier-only chord); Esc, an invalid chord or 10 s cancels. Presets remain as pills.
 
 **Shared URLSession for AssemblyAI**: A single long-lived `URLSession` is shared across all AssemblyAI streaming sessions (owned by the provider, not the session). Creating and invalidating a URLSession per session corrupts the OS connection pool and causes "Socket is not connected" errors after a few rapid reconnections.
 
@@ -136,7 +136,8 @@ Worker vars: `FIREWORKS_CHAT_MODEL`, `FIREWORKS_TRANSCRIPTION_MODEL`, `ELEVENLAB
 | `OpenAIAudioTranscriptionProvider.swift` | ~317 | Legacy upload provider. |
 | `AppleSpeechTranscriptionProvider.swift` | ~147 | Offline fallback provider. |
 | `BuddyAudioConversionSupport.swift` | ~108 | PCM16 conversion + WAV builder. |
-| `GlobalPushToTalkShortcutMonitor.swift` | ~132 | Listen-only CGEvent tap for ctrl+option. |
+| `GlobalPushToTalkShortcutMonitor.swift` | ~180 | Listen-only CGEvent tap for the push-to-talk chord; chord recording mode. |
+| `Sounder/Voice/PushToTalkChord.swift` | ~80 | Recordable chord model: modifiers + optional key, key-cap labels, validity. |
 | `ElevenLabsTTSClient.swift` | ~81 | Optional TTS via Worker `/tts`. |
 | `CompanionScreenCaptureUtility.swift` | ~132 | Legacy multi-monitor downscaled capture (unused by the Octo pipeline). |
 | `CompanionResponseOverlay.swift` | ~217 | Legacy response bubble (unused). |

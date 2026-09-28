@@ -51,6 +51,17 @@ enum BuddyPushToTalkShortcut {
             }
         }
 
+        /// The preset as a chord, for the settings pills and the legacy migration.
+        var chord: PushToTalkChord {
+            switch self {
+            case .shiftFunction: return PushToTalkChord(modifierFlags: [.shift, .function], keyCode: nil)
+            case .controlOption: return PushToTalkChord(modifierFlags: [.control, .option], keyCode: nil)
+            case .shiftControl: return PushToTalkChord(modifierFlags: [.shift, .control], keyCode: nil)
+            case .controlOptionSpace: return PushToTalkChord(modifierFlags: [.control, .option], keyCode: BuddyPushToTalkShortcut.pushToTalkKeyCode)
+            case .shiftControlSpace: return PushToTalkChord(modifierFlags: [.shift, .control], keyCode: BuddyPushToTalkShortcut.pushToTalkKeyCode)
+            }
+        }
+
         fileprivate var modifierOnlyFlags: NSEvent.ModifierFlags? {
             switch self {
             case .shiftFunction:
@@ -92,24 +103,32 @@ enum BuddyPushToTalkShortcut {
         case keyUp
     }
 
-    private static let selectedShortcutDefaultsKey = "sounderPushToTalkShortcut"
+    private static let legacyShortcutDefaultsKey = "sounderPushToTalkShortcut"
+    private static let chordDefaultsKey = "octoPushToTalkChord"
+    static let pushToTalkKeyCode: UInt16 = 49 // Space
 
-    /// The user's push-to-talk chord, chosen in the notch settings. Read on every
-    /// event so a change applies immediately without restarting the event tap.
-    static var currentShortcutOption: ShortcutOption {
+    /// The user's push-to-talk chord: a preset or one they recorded in settings.
+    /// Read on every event so a change applies immediately without restarting the tap.
+    static var currentChord: PushToTalkChord {
         get {
-            guard let storedRawValue = UserDefaults.standard.string(forKey: selectedShortcutDefaultsKey),
-                  let storedOption = ShortcutOption(rawValue: storedRawValue) else {
-                return .controlOption
+            if let data = UserDefaults.standard.data(forKey: chordDefaultsKey),
+               let chord = try? JSONDecoder().decode(PushToTalkChord.self, from: data), chord.isValid {
+                return chord
             }
-            return storedOption
+            // Older builds stored a preset name.
+            if let storedRawValue = UserDefaults.standard.string(forKey: legacyShortcutDefaultsKey),
+               let storedOption = ShortcutOption(rawValue: storedRawValue) {
+                return storedOption.chord
+            }
+            return .controlOption
         }
         set {
-            UserDefaults.standard.set(newValue.rawValue, forKey: selectedShortcutDefaultsKey)
+            if let data = try? JSONEncoder().encode(newValue) {
+                UserDefaults.standard.set(data, forKey: chordDefaultsKey)
+            }
         }
     }
-    static let pushToTalkKeyCode: UInt16 = 49 // Space
-    static var pushToTalkDisplayText: String { currentShortcutOption.displayText }
+    static var pushToTalkDisplayText: String { currentChord.displayText }
     static var pushToTalkTooltipText: String { "push to talk (\(pushToTalkDisplayText))" }
 
     static func shortcutTransition(
@@ -175,41 +194,30 @@ enum BuddyPushToTalkShortcut {
         modifierFlags: NSEvent.ModifierFlags,
         wasShortcutPreviouslyPressed: Bool
     ) -> ShortcutTransition {
-        if let modifierOnlyFlags = currentShortcutOption.modifierOnlyFlags {
+        let chord = currentChord
+        let chordModifiers = chord.modifierFlags
+
+        guard let chordKeyCode = chord.keyCode else {
+            // Modifier-only chord: held while every modifier in it is down.
             guard shortcutEventType == .flagsChanged else { return .none }
-
-            let isShortcutCurrentlyPressed = modifierFlags.contains(modifierOnlyFlags)
-
-            if isShortcutCurrentlyPressed && !wasShortcutPreviouslyPressed {
-                return .pressed
-            }
-
-            if !isShortcutCurrentlyPressed && wasShortcutPreviouslyPressed {
-                return .released
-            }
-
+            let isShortcutCurrentlyPressed = modifierFlags.contains(chordModifiers)
+            if isShortcutCurrentlyPressed && !wasShortcutPreviouslyPressed { return .pressed }
+            if !isShortcutCurrentlyPressed && wasShortcutPreviouslyPressed { return .released }
             return .none
         }
 
-        guard let pushToTalkModifierFlags = currentShortcutOption.spaceShortcutModifierFlags else {
-            return .none
-        }
-
-        let matchesModifierFlags = modifierFlags.isSuperset(of: pushToTalkModifierFlags)
-
-        if shortcutEventType == .keyDown
-            && keyCode == pushToTalkKeyCode
-            && matchesModifierFlags
-            && !wasShortcutPreviouslyPressed {
+        // Chord with a key: down on keyDown of that key with the modifiers held,
+        // up on its keyUp, or if a modifier is let go first.
+        let matchesModifierFlags = modifierFlags.isSuperset(of: chordModifiers)
+        if shortcutEventType == .keyDown && keyCode == chordKeyCode && matchesModifierFlags && !wasShortcutPreviouslyPressed {
             return .pressed
         }
-
-        if shortcutEventType == .keyUp
-            && keyCode == pushToTalkKeyCode
-            && wasShortcutPreviouslyPressed {
+        if shortcutEventType == .keyUp && keyCode == chordKeyCode && wasShortcutPreviouslyPressed {
             return .released
         }
-
+        if shortcutEventType == .flagsChanged && wasShortcutPreviouslyPressed && !matchesModifierFlags {
+            return .released
+        }
         return .none
     }
 }
