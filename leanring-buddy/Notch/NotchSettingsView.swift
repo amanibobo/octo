@@ -233,7 +233,6 @@ struct NotchSettingsView: View {
                 SettingsRow { NotchInfoRow(title: "Model", value: companionManager.chatModelDisplayName) }
                 SettingsRow { NotchInfoRow(title: "Proxy", value: companionManager.isWorkerReachable ? "Connected" : "Unreachable", isBad: !companionManager.isWorkerReachable, showsStatusDot: true) }
                 SettingsRow { NotchInfoRow(title: "Clinical rules", value: companionManager.isAnalysisServiceReachable ? "Connected" : "Unreachable", isBad: !companionManager.isAnalysisServiceReachable, showsStatusDot: true) }
-                SettingsRow { NotchInfoRow(title: "Decisions (Jev)", value: companionManager.isJevConfigured ? "Connected" : "Not configured", isBad: false, showsStatusDot: companionManager.isJevConfigured) }
                 SettingsRow(isLast: true) { NotchInfoRow(title: "Transcription", value: companionManager.buddyDictationManager.transcriptionProviderDisplayName) }
             }
             HStack(spacing: 8) {

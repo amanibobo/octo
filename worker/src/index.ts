@@ -10,11 +10,10 @@
  *   POST /chat              → Fireworks chat completions (OpenAI-compatible, vision + JSON schema, streaming passthrough)
  *   POST /transcribe        → Fireworks Whisper (multipart passthrough, returns {"text": ...})
  *   POST /tts               → ElevenLabs text-to-speech (optional; 503 when no key is configured)
- *   POST /jev               → TypeSafe Jev "System One" decisions (typed questions → probabilities; 503 when no key)
  *   POST /transcribe-token  → AssemblyAI short-lived streaming token (optional legacy path; 503 when no key)
  *   ANY  /analysis/*        → passthrough to the Python analysis service when ANALYSIS_BACKEND_URL is set
  *
- * Secrets (wrangler secret put ...): ANTHROPIC_API_KEY, FIREWORKS_API_KEY, ELEVENLABS_API_KEY, ASSEMBLYAI_API_KEY, TYPESAFE_API_KEY
+ * Secrets (wrangler secret put ...): ANTHROPIC_API_KEY, FIREWORKS_API_KEY, ELEVENLABS_API_KEY, ASSEMBLYAI_API_KEY
  * Vars (wrangler.toml): FIREWORKS_CHAT_MODEL, FIREWORKS_TRANSCRIPTION_MODEL, ELEVENLABS_VOICE_ID, ANALYSIS_BACKEND_URL
  */
 
@@ -28,8 +27,6 @@ interface Env {
   ELEVENLABS_VOICE_ID?: string;
   ASSEMBLYAI_API_KEY?: string;
   ANALYSIS_BACKEND_URL?: string;
-  TYPESAFE_API_KEY?: string;
-  JEV_MODEL?: string;
 }
 
 const FIREWORKS_CHAT_COMPLETIONS_URL = "https://api.fireworks.ai/inference/v1/chat/completions";
@@ -41,8 +38,6 @@ const DEFAULT_FIREWORKS_CHAT_MODEL = "accounts/fireworks/routers/kimi-k3-fast";
 const ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages";
 const DEFAULT_CLAUDE_MODEL = "claude-sonnet-5";
 const DEFAULT_FIREWORKS_TRANSCRIPTION_MODEL = "whisper-v3-turbo";
-const TYPESAFE_SYSTEMONE_URL = "https://api.typesafe.ai/v1/systemone";
-const DEFAULT_JEV_MODEL = "jev-latest";
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -77,10 +72,6 @@ export default {
         return await handleTTS(request, env);
       }
 
-      if (url.pathname === "/jev") {
-        return await handleJev(request, env);
-      }
-
       if (url.pathname === "/transcribe-token") {
         return await handleTranscribeToken(env);
       }
@@ -111,8 +102,6 @@ function handleHealth(env: Env): Response {
     elevenLabsConfigured: Boolean(env.ELEVENLABS_API_KEY),
     assemblyAIConfigured: Boolean(env.ASSEMBLYAI_API_KEY),
     analysisBackendConfigured: Boolean(env.ANALYSIS_BACKEND_URL),
-    jevConfigured: Boolean(env.TYPESAFE_API_KEY),
-    jevModel: env.JEV_MODEL || DEFAULT_JEV_MODEL,
   });
 }
 
@@ -210,41 +199,6 @@ async function handleClaude(request: Request, env: Env): Promise<Response> {
  * Fireworks Whisper. The multipart body is streamed through untouched; only the
  * auth header is added. Fireworks' audio host expects the raw key, not "Bearer".
  */
-/**
- * Jev decisions. The body is TypeSafe's System One request ({ state, questions })
- * minus the model, which the Worker fills in. Answers come back as typed
- * probabilities; the app applies its own confidence thresholds.
- */
-async function handleJev(request: Request, env: Env): Promise<Response> {
-  if (!env.TYPESAFE_API_KEY) {
-    return jsonResponse({ error: "TYPESAFE_API_KEY is not configured on the Worker" }, 503);
-  }
-
-  let requestBody: Record<string, unknown>;
-  try {
-    requestBody = (await request.json()) as Record<string, unknown>;
-  } catch {
-    return jsonResponse({ error: "Body must be JSON" }, 400);
-  }
-  if (!requestBody.model) {
-    requestBody.model = env.JEV_MODEL || DEFAULT_JEV_MODEL;
-  }
-
-  const upstream = await fetch(TYPESAFE_SYSTEMONE_URL, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${env.TYPESAFE_API_KEY}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify(requestBody),
-  });
-
-  return new Response(upstream.body, {
-    status: upstream.status,
-    headers: { "content-type": upstream.headers.get("content-type") ?? "application/json" },
-  });
-}
-
 async function handleTranscribe(request: Request, env: Env): Promise<Response> {
   if (!env.FIREWORKS_API_KEY) {
     return jsonResponse({ error: "FIREWORKS_API_KEY is not configured on the Worker" }, 503);
