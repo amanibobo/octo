@@ -292,9 +292,9 @@ enum DictateIntent {
 // MARK: - Read me this dialog
 
 enum DialogReaderIntent {
-    private static let phrases = ["read me this", "read this dialog", "read the dialog", "read this window", "read this alert", "read this popup",
-                                  "what does this dialog say", "what does this window say", "what does this alert say", "read the screen to me",
-                                  "read me the screen", "what are my options here", "what buttons are there", "read this out"]
+    private static let phrases = ["read me this dialog", "read me this window", "read this dialog", "read the dialog", "read this window", "read this alert",
+                                  "read this popup", "read me this alert", "what does this dialog say", "what does this window say", "what does this alert say",
+                                  "what are my options here", "what buttons are there"]
 
     static func matches(_ transcript: String) -> Bool {
         let lowered = transcript.lowercased()

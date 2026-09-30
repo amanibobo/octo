@@ -204,11 +204,18 @@ private struct CameraContextView: View {
     @ObservedObject var model: CameraContextModel
     let session: AVCaptureSession
     let onClose: () -> Void
-    @State private var scanPhase: CGFloat = 0
+    @State private var hasAppeared = false
 
     private let previewSize = CGSize(width: 640, height: 400)
 
     var body: some View {
+        card
+            .scaleEffect(hasAppeared ? 1 : 0.94)
+            .opacity(hasAppeared ? 1 : 0)
+            .onAppear { withAnimation(.spring(response: 0.45, dampingFraction: 0.82)) { hasAppeared = true } }
+    }
+
+    private var card: some View {
         ZStack(alignment: .topLeading) {
             GeometryReader { proxy in
                 ZStack(alignment: .topLeading) {
@@ -227,37 +234,21 @@ private struct CameraContextView: View {
                                 .transition(.opacity.combined(with: .scale(scale: 0.96)))
                         }
                     }
-                    // A soft scan line sweeps while Octo is reading the frame.
-                    if model.status.hasPrefix("reading") || model.status.hasPrefix("warming") {
-                        Rectangle()
-                            .fill(LinearGradient(colors: [DS.Colors.overlayCursorBlue.opacity(0), DS.Colors.overlayCursorBlue.opacity(0.55), DS.Colors.overlayCursorBlue.opacity(0)], startPoint: .top, endPoint: .bottom))
-                            .frame(width: proxy.size.width, height: 90)
-                            .offset(y: -45 + proxy.size.height * scanPhase)
-                            .onAppear {
-                                withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) { scanPhase = 1 }
-                            }
-                            .allowsHitTesting(false)
-                    }
                 }
             }
             .frame(width: previewSize.width, height: previewSize.height)
             .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
 
             // Status pill, top-left; close, top-right. Both float over the picture.
-            HStack(spacing: 7) {
-                Circle()
-                    .fill(Color(red: 0.98, green: 0.3, blue: 0.3))
-                    .frame(width: 7, height: 7)
-                    .shadow(color: Color.red.opacity(0.8), radius: 4)
-                Text(model.status)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .foregroundColor(.white)
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 11)
-            .padding(.vertical, 6)
-            .background(Capsule().fill(Color.black.opacity(0.45)).overlay(Capsule().stroke(Color.white.opacity(0.14), lineWidth: 1)))
-            .padding(14)
+            Text(model.status)
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundColor(.white.opacity(0.92))
+                .lineLimit(1)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Capsule().fill(Color.black.opacity(0.4)))
+                .padding(14)
+                .animation(.easeInOut(duration: 0.25), value: model.status)
 
             HStack {
                 Spacer()

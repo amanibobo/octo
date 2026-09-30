@@ -40,6 +40,25 @@ struct AgentAction {
     let expectedOutcome: String?
 }
 
+/// One rehearsed step: what will happen, and on which element if it is visible now.
+struct AgentPlanStep {
+    let number: Int
+    let action: String
+    let elementID: Int?
+    let detail: String?
+    let description: String
+    let expectedOutcome: String?
+
+    var promptLine: String {
+        var line = "\(number). \(action)"
+        if let elementID { line += " element \(elementID)" }
+        if let detail, !detail.isEmpty { line += " \"\(detail)\"" }
+        line += " — \(description)"
+        if let expectedOutcome, !expectedOutcome.isEmpty { line += " (then: \(expectedOutcome))" }
+        return line
+    }
+}
+
 struct AgentVerdict {
     let isAchieved: Bool
     let evidence: String
@@ -121,6 +140,46 @@ final class AgentModePipeline {
         return AgentVerdict(isAchieved: (object["achieved"] as? Bool) ?? false,
                             evidence: (object["evidence"] as? String) ?? "no evidence",
                             nextHint: object["next_hint"] as? String)
+    }
+
+    private static let planSchema: [String: Any] = [
+        "type": "object",
+        "properties": [
+            "steps": ["type": "array", "items": ["type": "object", "properties": [
+                "action": ["type": "string", "enum": ["open_app", "open_url", "click", "double_click", "type", "press_keys", "scroll", "wait"]],
+                "element_id": ["type": ["integer", "null"]],
+                "detail": ["type": ["string", "null"]],
+                "description": ["type": "string"],
+                "expected_outcome": ["type": ["string", "null"]]
+            ], "required": ["action", "element_id", "detail", "description", "expected_outcome"]]],
+            "spoken_summary": ["type": "string"]
+        ],
+        "required": ["steps", "spoken_summary"]
+    ]
+
+    /// Dry run: the whole task as a short ordered plan against the current screen.
+    /// Steps that will happen on screens not visible yet carry no element id.
+    func plan(task: String, researchNotes: String?, userContextText: String?, redirect: String?, capture: SounderScreenCapture, elements: [ScreenElement]) async throws -> (steps: [AgentPlanStep], spokenSummary: String) {
+        let groundingElements = Array(elements.prefix(Self.maximumElementsSentToModel))
+        var images: [ChatModelImage] = []
+        if let marked = SetOfMarkRenderer.renderMarkedScreenshot(capture: capture.cgImage, elements: groundingElements, maximumWidth: 1280) {
+            images.append(ChatModelImage(data: marked.data, mimeType: "image/jpeg"))
+        }
+        let elementListText = groundingElements.map { "[\($0.id)] \(Self.roleLabel($0)): \(String($0.text.prefix(60)))" }.joined(separator: "\n")
+        var userText = "task: \"\(task)\"\nfrontmost app: \(MacControl.frontmostApplicationName())\n"
+        if let userContextText { userText += userContextText + "\n" }
+        if let researchNotes { userText += "research notes:\n\(researchNotes)\n" }
+        if let redirect { userText += "the user watched the previous plan and said: \"\(redirect)\". change the plan accordingly.\n" }
+        userText += "\nelements on screen (id → role: text):\n\(elementListText.isEmpty ? "(no text detected)" : elementListText)"
+        let object = try await chatClient.completeJSON(
+            systemPrompt: "you are octo, planning how to carry out a spoken task on the user's mac before doing anything. write the whole plan as 2 to 8 concrete steps in order. for each step: action (open_app, open_url, click, double_click, type, press_keys, scroll, wait), element_id only when the target is visible on the current screen (from the numbered list), detail (the app name, url, text to type, or key combo), a 3-8 word description shown to the user, and expected_outcome. later steps that depend on a screen not visible yet have element_id null and describe the target in words. prefer urls and search fields over many clicks. spoken_summary: one lowercase sentence, e.g. \"three steps: open spotify, search for the song, press play.\"" + " " + Self.systemPrompt.components(separatedBy: "spotify playbook:").dropFirst().map { "spotify playbook:" + $0 }.joined(),
+            userText: userText, images: images, priorTurns: [], jsonSchema: Self.planSchema, maxTokens: 900, timeoutSeconds: 30)
+        let steps = ((object["steps"] as? [[String: Any]]) ?? []).enumerated().compactMap { index, entry -> AgentPlanStep? in
+            guard let action = entry["action"] as? String, let description = entry["description"] as? String else { return nil }
+            return AgentPlanStep(number: index + 1, action: action, elementID: entry["element_id"] as? Int, detail: entry["detail"] as? String,
+                                 description: description, expectedOutcome: entry["expected_outcome"] as? String)
+        }
+        return (Array(steps.prefix(8)), (object["spoken_summary"] as? String) ?? "here's the plan.")
     }
 
     static func roleLabel(_ element: ScreenElement) -> String {

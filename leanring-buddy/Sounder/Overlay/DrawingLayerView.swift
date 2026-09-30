@@ -262,6 +262,33 @@ struct DrawingLayerView: View {
             .position(x: patch.midX, y: patch.midY)
             .opacity(Double(model.drawProgress))
 
+        case .textBlock(_, let rectInCapturePixels, let segments, let lineHeightInCapturePixels, let red, let green, let blue, let usesDarkText):
+            let rect = geometry.overlayRect(fromCapturePixelRect: rectInCapturePixels)
+            let patch = rect.insetBy(dx: -8, dy: -6)
+            let fontSize = max(10, geometry.overlayRect(fromCapturePixelRect: CGRect(x: 0, y: 0, width: 1, height: lineHeightInCapturePixels)).height * 0.72)
+            let textColor = usesDarkText ? Color(white: 0.1) : Color(white: 0.97)
+            ZStack(alignment: .topLeading) {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color(red: red, green: green, blue: blue))
+                    .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(DS.Colors.overlayCursorBlue.opacity(0.6), lineWidth: 1))
+                Text(Self.attributedText(for: segments, fontSize: fontSize, textColor: textColor))
+                    .lineSpacing(fontSize * 0.28)
+                    .frame(width: patch.width - 16, alignment: .topLeading)
+                    .padding(8)
+            }
+            .frame(width: patch.width, alignment: .topLeading)
+            .fixedSize(horizontal: false, vertical: true)
+            .position(x: patch.midX, y: patch.minY + max(patch.height, 10) / 2)
+            .opacity(Double(model.drawProgress))
+
+        case .marginBar(_, let rectInCapturePixels, let color):
+            let rect = geometry.overlayRect(fromCapturePixelRect: rectInCapturePixels)
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .fill(swiftUIColor(color))
+                .frame(width: 4, height: rect.height + 6)
+                .position(x: rect.minX - 10, y: rect.midY)
+                .opacity(Double(model.drawProgress))
+
         case .underline(let id, let rectInCapturePixels, let color):
             let rect = geometry.overlayRect(fromCapturePixelRect: rectInCapturePixels)
             RoughLineShape(seed: id, from: CGPoint(x: rect.minX - 3, y: rect.maxY + 2), to: CGPoint(x: rect.maxX + 3, y: rect.maxY + 2))
@@ -296,6 +323,22 @@ struct DrawingLayerView: View {
         let clipRect = clipRectInCapturePixels.map { geometry.overlayRect(fromCapturePixelRect: $0) }
             ?? CGRect(origin: .zero, size: CGSize(width: screenFrame.width, height: screenFrame.height))
         return Rectangle().path(in: clipRect)
+    }
+
+    /// Rewritten paragraph with the changed runs marked in green.
+    private static func attributedText(for segments: [TextBlockSegment], fontSize: CGFloat, textColor: Color) -> AttributedString {
+        var result = AttributedString()
+        for segment in segments {
+            var piece = AttributedString(segment.text)
+            piece.font = .system(size: fontSize, weight: segment.isChanged ? .semibold : .regular)
+            piece.foregroundColor = textColor
+            if segment.isChanged {
+                piece.backgroundColor = DS.Colors.overlayCursorBlue.opacity(0.28)
+                piece.underlineStyle = .single
+            }
+            result += piece
+        }
+        return result
     }
 
     /// Where a line from the rect's centre toward `target` leaves the rect.

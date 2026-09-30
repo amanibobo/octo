@@ -110,6 +110,26 @@ final class CompanionManager: ObservableObject {
     private let translatePipeline: TranslatePipeline
     /// Camera as context: live webcam preview + OCR on a grabbed frame.
     private let cameraContextPanelManager = CameraContextPanelManager()
+    /// Make-readable structure and rewrite-in-place.
+    private let readabilityPipeline: ReadabilityPipeline
+    /// Read-aloud session: survives hotkey interruptions so "skip", "explain that"
+    /// and "continue" pick up where the voice stopped.
+    private var readAloudScript: ReadAloudScript?
+    private var readAloudIndex = 0
+    private var readAloudGeometry: CaptureGeometry?
+    private var isReadingAloud = false
+    /// Agent rehearsal: the ghost cursor's position (global AppKit) and step label
+    /// while a plan is being acted out, and the plan waiting for "go".
+    @Published private(set) var ghostCursorGlobalPoint: CGPoint?
+    @Published private(set) var ghostStepLabel: String = ""
+    private struct PendingRehearsal {
+        let task: String
+        let steps: [AgentPlanStep]
+        let researchNotes: ResearchNotes?
+        let screenAnalysis: ScreenAnalysis
+    }
+    private var pendingRehearsal: PendingRehearsal?
+    private var rehearsalTimeoutTask: Task<Void, Never>?
     /// Guided path: a numbered route the user clicks through; lights up as they go.
     private var guidedRouteElements: [ScreenElement] = []
     private var guidedRouteLabels: [String] = []
@@ -249,6 +269,7 @@ final class CompanionManager: ObservableObject {
         self.researchAgent = ResearchAgent(workerBaseURL: workerBaseURL)
         self.whiteboardPipeline = WhiteboardPipeline(chatClient: chatClient)
         self.translatePipeline = TranslatePipeline(chatClient: chatClient)
+        self.readabilityPipeline = ReadabilityPipeline(chatClient: chatClient)
 
         let offlineVoiceEnabled = UserDefaults.standard.object(forKey: "sounderOfflineVoiceEnabled") == nil
             ? true
@@ -357,6 +378,16 @@ final class CompanionManager: ObservableObject {
     func setDwellEnabled(_ isEnabled: Bool) {
         isDwellEnabled = isEnabled
         UserDefaults.standard.set(isEnabled, forKey: "octoDwellEnabled")
+    }
+
+    /// Agent rehearsal: act the plan out with a ghost cursor and wait for "go" before doing it.
+    @Published private(set) var isAgentRehearsalEnabled: Bool = UserDefaults.standard.object(forKey: "octoAgentRehearsalEnabled") == nil
+        ? true
+        : UserDefaults.standard.bool(forKey: "octoAgentRehearsalEnabled")
+
+    func setAgentRehearsalEnabled(_ isEnabled: Bool) {
+        isAgentRehearsalEnabled = isEnabled
+        UserDefaults.standard.set(isEnabled, forKey: "octoAgentRehearsalEnabled")
     }
 
     func setOfflineVoiceEnabled(_ isEnabled: Bool) {
@@ -572,7 +603,7 @@ final class CompanionManager: ObservableObject {
         typedQuestionTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self, let data = try? Data(contentsOf: askFileURL), let question = String(data: data, encoding: .utf8) else { return }
-                try? FileManager.default.removeItem(at: askFileURL)
+                do { try FileManager.default.removeItem(at: askFileURL) } catch { print("⌨️ could not remove ask.txt: \(error.localizedDescription)") }
                 var trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty, self.currentResponseTask == nil else { return }
                 // Optional first line "roi: x y w h" in top-left screen points stands in for a circle gesture.
@@ -812,6 +843,36 @@ final class CompanionManager: ObservableObject {
                 return
             }
 
+            // A rehearsed plan is waiting: "go", a redirect, or cancel.
+            if let rehearsal = pendingRehearsal {
+                try await resolveRehearsal(rehearsal, transcript: transcript, screenAnalysis: screenAnalysis, report: &report)
+                finishReport(&report, startedAt: interactionStartedAt)
+                return
+            }
+
+            // Read-aloud session commands ("skip this section", "explain that", "stop").
+            if readAloudScript != nil, let command = ReadAloudIntent.command(whileReading: transcript) {
+                try await handleReadAloudCommand(command, screenAnalysis: screenAnalysis, report: &report)
+                finishReport(&report, startedAt: interactionStartedAt)
+                return
+            }
+            if readAloudScript != nil { endReadAloud() } // anything else ends the reading
+            if ReadAloudIntent.startRequested(transcript) {
+                try await startReadAloud(screenAnalysis: screenAnalysis, report: &report)
+                finishReport(&report, startedAt: interactionStartedAt)
+                return
+            }
+            if ReadableIntent.matches(transcript) {
+                try await runMakeReadable(screenAnalysis: screenAnalysis, report: &report)
+                finishReport(&report, startedAt: interactionStartedAt)
+                return
+            }
+            if screenAnalysis.regionOfInterestInCapturePixels != nil, let rewriteRequest = RewriteIntent.detect(transcript) {
+                try await runRewrite(request: rewriteRequest, screenAnalysis: screenAnalysis, report: &report)
+                finishReport(&report, startedAt: interactionStartedAt)
+                return
+            }
+
             // Camera as context: something held up to the webcam.
             if let cameraRequest = CameraIntent.detect(transcript, hasRegion: screenAnalysis.regionOfInterestInCapturePixels != nil) {
                 try await runCamera(request: cameraRequest, transcript: transcript, report: &report)
@@ -863,7 +924,11 @@ final class CompanionManager: ObservableObject {
             let shouldRunAgentMode = selectedMode == .agent
                 || (selectedMode == .automatic && AgentModePipeline.looksLikeTask(transcript))
             if shouldRunAgentMode {
-                try await runAgentMode(task: transcript, firstScreenAnalysis: screenAnalysis, report: &report)
+                if isAgentRehearsalEnabled {
+                    try await rehearseAgentTask(task: transcript, redirect: nil, previousNotes: nil, screenAnalysis: screenAnalysis, report: &report)
+                } else {
+                    try await runAgentMode(task: transcript, firstScreenAnalysis: screenAnalysis, report: &report)
+                }
                 finishReport(&report, startedAt: interactionStartedAt)
                 return
             }
@@ -1058,6 +1123,226 @@ final class CompanionManager: ObservableObject {
         guidedRouteStep = 0
     }
 
+    // MARK: - Read this to me
+
+    /// The circled region's lines, or, with no circle, the lines inside the frontmost
+    /// window (so a second window or the notch card is not read into the text).
+    private func linesForReading(_ screenAnalysis: ScreenAnalysis) -> [RecognizedTextLine] {
+        if let region = screenAnalysis.regionOfInterestInCapturePixels {
+            return screenAnalysis.textLines.filter { $0.boundingBoxInCapturePixels.intersects(region) }
+        }
+        if let windowRect = focusedWindowRectInCapturePixels(capture: screenAnalysis.capture) {
+            let inside = screenAnalysis.textLines.filter { windowRect.insetBy(dx: 4, dy: 4).contains($0.boundingBoxInCapturePixels) }
+            if inside.count >= 3 { return inside }
+        }
+        return screenAnalysis.textLines
+    }
+
+    private func focusedWindowRectInCapturePixels(capture: SounderScreenCapture) -> CGRect? {
+        guard let frameCG = AccessibilityElementReader.focusedWindowFrameCG(), let primaryScreen = NSScreen.screens.first else { return nil }
+        let displayFrame = capture.geometry.displayFrame
+        let displayFrameCG = CGRect(x: displayFrame.minX, y: primaryScreen.frame.maxY - displayFrame.maxY, width: displayFrame.width, height: displayFrame.height)
+        let pixelsPerPoint = CGFloat(capture.cgImage.width) / max(displayFrame.width, 1)
+        return CGRect(x: (frameCG.minX - displayFrameCG.minX) * pixelsPerPoint, y: (frameCG.minY - displayFrameCG.minY) * pixelsPerPoint,
+                      width: frameCG.width * pixelsPerPoint, height: frameCG.height * pixelsPerPoint)
+    }
+
+    /// Speech clients return once playback has begun; reading aloud needs the end.
+    private func waitForSpeechToFinish(maximumSeconds: TimeInterval = 90) async {
+        let deadline = Date().addingTimeInterval(maximumSeconds)
+        // Give the queue a beat to start before checking.
+        try? await Task.sleep(nanoseconds: 120_000_000)
+        while speechOutput.isPlaying, Date() < deadline, !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 80_000_000)
+        }
+    }
+
+    private func startReadAloud(screenAnalysis: ScreenAnalysis, report: inout SounderInteractionReport) async throws {
+        report.modeUsed = "Read aloud"
+        report.analysisTask = "read-aloud"
+        let script = ReadAloudScript.build(from: linesForReading(screenAnalysis))
+        gesturePathPointsGlobal = []
+        guard !script.sentences.isEmpty else {
+            try await speak("i don't see anything to read here.")
+            return
+        }
+        readAloudScript = script
+        readAloudIndex = 0
+        readAloudGeometry = screenAnalysis.capture.geometry
+        report.metricText = "\(script.sentences.count) sentences · \(script.paragraphCount) paragraphs"
+        print("📖 read aloud: \(script.sentences.count) sentences in \(script.paragraphCount) paragraphs")
+        try await speak("reading. hold the key and say skip, explain that, or stop.")
+        try await readAloudLoop()
+    }
+
+    /// Speaks sentence by sentence, lighting the lines of the one being read.
+    private func readAloudLoop() async throws {
+        guard let script = readAloudScript, let geometry = readAloudGeometry else { return }
+        isReadingAloud = true
+        defer { isReadingAloud = false }
+        while readAloudIndex < script.sentences.count {
+            try Task.checkCancellation()
+            let sentence = script.sentences[readAloudIndex]
+            let rects = sentence.lineIndices.map { script.lines[$0].boundingBoxInCapturePixels }
+            var primitives: [DrawingPrimitive] = rects.enumerated().map { index, rect in
+                .highlight(id: "read-\(readAloudIndex)-\(index)", rectInCapturePixels: rect.insetBy(dx: -3, dy: -2), color: .yellow)
+            }
+            if let first = rects.first {
+                primitives.append(.marginBar(id: "read-bar-\(readAloudIndex)", rectInCapturePixels: first, color: .green))
+            }
+            drawingLayerModel.show(primitives, geometry: geometry)
+            try await speak(sentence.text)
+            await waitForSpeechToFinish()
+            try Task.checkCancellation()
+            readAloudIndex += 1
+        }
+        print("📖 finished \(script.sentences.count) sentences")
+        drawingLayerModel.clear()
+        try await speak("that's the end of what's on screen. scroll down and say continue if there's more.")
+    }
+
+    private func handleReadAloudCommand(_ command: ReadAloudIntent.Command, screenAnalysis: ScreenAnalysis, report: inout SounderInteractionReport) async throws {
+        report.modeUsed = "Read aloud"
+        guard let script = readAloudScript else { return }
+        switch command {
+        case .start:
+            try await startReadAloud(screenAnalysis: screenAnalysis, report: &report)
+        case .stop:
+            endReadAloud()
+            report.analysisTask = "read-stop"
+            try await speak("okay.")
+        case .skipSection:
+            let currentParagraph = readAloudIndex < script.sentences.count ? script.sentences[readAloudIndex].paragraphIndex : script.paragraphCount
+            if let next = script.sentences.firstIndex(where: { $0.paragraphIndex > currentParagraph }) {
+                readAloudIndex = next
+                report.analysisTask = "read-skip"
+                try await readAloudLoop()
+            } else {
+                endReadAloud()
+                try await speak("that was the last section on screen.")
+            }
+        case .back:
+            readAloudIndex = max(0, readAloudIndex - 1)
+            report.analysisTask = "read-back"
+            try await readAloudLoop()
+        case .resume:
+            report.analysisTask = "read-resume"
+            if readAloudIndex >= script.sentences.count {
+                // Finished the visible text: read whatever is on screen now (the user scrolled).
+                try await startReadAloud(screenAnalysis: screenAnalysis, report: &report)
+            } else {
+                try await readAloudLoop()
+            }
+        case .explain:
+            report.analysisTask = "read-explain"
+            let index = min(readAloudIndex, script.sentences.count - 1)
+            let sentence = script.sentences[index]
+            let question = "explain this sentence from what i'm reading, briefly: \"\(sentence.text)\""
+            let rects = sentence.lineIndices.map { script.lines[$0].boundingBoxInCapturePixels }
+            let region = rects.dropFirst().reduce(rects.first ?? .zero) { $0.union($1) }
+            try await runGeneralMode(transcript: question, capture: screenAnalysis.capture, elements: screenAnalysis.elements,
+                                     regionOfInterest: region.isEmpty ? nil : region.insetBy(dx: -40, dy: -40), report: &report,
+                                     regionReason: "the user is having this text read aloud and asked to explain the highlighted sentence")
+            try Task.checkCancellation()
+            try await readAloudLoop()
+        }
+    }
+
+    private func endReadAloud() {
+        readAloudScript = nil
+        readAloudIndex = 0
+        readAloudGeometry = nil
+        isReadingAloud = false
+    }
+
+    // MARK: - Make this readable
+
+    private func runMakeReadable(screenAnalysis: ScreenAnalysis, report: inout SounderInteractionReport) async throws {
+        report.modeUsed = "Readable"
+        report.analysisTask = "readable"
+        let lines = Array(linesForReading(screenAnalysis)
+            .sorted { $0.boundingBoxInCapturePixels.minY < $1.boundingBoxInCapturePixels.minY }
+            .filter { $0.text.count >= 3 }
+            .prefix(120))
+        gesturePathPointsGlobal = []
+        guard lines.count >= 4 else {
+            try await speak("there isn't enough text here to structure.")
+            return
+        }
+        presentCaption("reading the page…")
+        let startedAt = Date()
+        let structure = try await readabilityPipeline.structure(for: lines.map(\.text))
+        report.planSeconds = Date().timeIntervalSince(startedAt)
+        try Task.checkCancellation()
+
+        var primitives = regionOutlinePrimitives(screenAnalysis.regionOfInterestInCapturePixels)
+        for index in structure.headingLineIndices {
+            let box = lines[index].boundingBoxInCapturePixels
+            primitives.append(.marginBar(id: "heading-\(index)", rectInCapturePixels: box, color: .green))
+            primitives.append(.underline(id: "heading-line-\(index)", rectInCapturePixels: box, color: .green))
+        }
+        for index in structure.keyPointLineIndices where !structure.headingLineIndices.contains(index) {
+            primitives.append(.highlight(id: "key-\(index)", rectInCapturePixels: lines[index].boundingBoxInCapturePixels.insetBy(dx: -3, dy: -2), color: .yellow))
+        }
+        for (position, definition) in structure.definitions.enumerated() {
+            let box = lines[definition.lineIndex].boundingBoxInCapturePixels
+            primitives.append(.badge(id: "def-\(position)", anchorInCapturePixels: CGPoint(x: box.maxX + 2, y: box.midY), text: "\(definition.term): \(definition.definition)"))
+        }
+        drawingLayerModel.show(primitives, geometry: screenAnalysis.capture.geometry, autoClearAfterSeconds: 150)
+        report.metricText = "\(structure.headingLineIndices.count) headings · \(structure.keyPointLineIndices.count) key points · \(structure.definitions.count) definitions"
+        print("📑 readable: \(report.metricText ?? "")")
+        try await speak(structure.summary.isEmpty ? "i've marked the headings and key points." : structure.summary)
+    }
+
+    // MARK: - Fix this paragraph
+
+    private func runRewrite(request: RewriteRequest, screenAnalysis: ScreenAnalysis, report: inout SounderInteractionReport) async throws {
+        report.modeUsed = "Rewrite"
+        report.analysisTask = "rewrite"
+        guard let region = screenAnalysis.regionOfInterestInCapturePixels else { return }
+        let lines = screenAnalysis.textLines
+            .filter { $0.boundingBoxInCapturePixels.intersects(region) }
+            .sorted { $0.boundingBoxInCapturePixels.minY < $1.boundingBoxInCapturePixels.minY }
+        gesturePathPointsGlobal = []
+        guard !lines.isEmpty else {
+            try await speak("i don't see text in what you circled.")
+            return
+        }
+        var paragraph = ""
+        for line in lines {
+            var text = line.text.trimmingCharacters(in: .whitespaces)
+            if text.hasSuffix("-"), text.count > 2 { text.removeLast() } else { text += " " }
+            paragraph += text
+        }
+        paragraph = paragraph.trimmingCharacters(in: .whitespaces)
+        presentCaption("rewriting…")
+        let startedAt = Date()
+        let result = try await readabilityPipeline.rewrite(paragraph, instruction: request.instruction)
+        report.planSeconds = Date().timeIntervalSince(startedAt)
+        try Task.checkCancellation()
+        guard !result.rewritten.isEmpty else {
+            try await speak("i couldn't come up with a better version.")
+            return
+        }
+
+        let block = lines.dropFirst().reduce(lines[0].boundingBoxInCapturePixels) { $0.union($1.boundingBoxInCapturePixels) }
+        let heights = lines.map(\.boundingBoxInCapturePixels.height).sorted()
+        let background = BackgroundColorSampler.sample(screenAnalysis.capture.cgImage, around: block)
+        let segments = result.segments.map { TextBlockSegment(text: $0.text, isChanged: $0.isChanged) }
+        let primitives: [DrawingPrimitive] = [
+            .textBlock(id: "rewrite", rectInCapturePixels: block, segments: segments, lineHeightInCapturePixels: heights[heights.count / 2],
+                       backgroundRed: background.red, backgroundGreen: background.green, backgroundBlue: background.blue, usesDarkText: background.luminance > 0.55)
+        ]
+        drawingLayerModel.show(primitives, geometry: screenAnalysis.capture.geometry, autoClearAfterSeconds: 120)
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(result.rewritten, forType: .string)
+        let changedCount = result.segments.filter(\.isChanged).count
+        report.metricText = "\(changedCount) changes · \(result.rewritten.count) chars"
+        print("✍️ rewrite (\(request.instruction)): \(changedCount) changed spans")
+        try await speak("here's the rewrite, changes are marked, and it's on your clipboard. \(result.summary)")
+    }
+
     // MARK: - Camera as context
 
     private func runCamera(request: CameraIntent.Request, transcript: String, report: inout SounderInteractionReport) async throws {
@@ -1154,10 +1439,7 @@ final class CompanionManager: ObservableObject {
         report.analysisTask = "translate-\(request.targetLanguageName)"
         let capture = screenAnalysis.capture
         let region = screenAnalysis.regionOfInterestInCapturePixels
-        let scopedLines = screenAnalysis.textLines.filter { line in
-            guard let region else { return true }
-            return line.boundingBoxInCapturePixels.intersects(region)
-        }
+        let scopedLines = linesForReading(screenAnalysis)
         let candidates = Array(TranslateIntent.candidateLines(scopedLines, target: request.targetLanguage, isScoped: region != nil).prefix(120))
         gesturePathPointsGlobal = []
         guard !candidates.isEmpty else {
@@ -1346,17 +1628,127 @@ final class CompanionManager: ObservableObject {
         try await speak(spokenText)
     }
 
+    private static func agentNotes(research: ResearchNotes?, approvedPlan: [AgentPlanStep]?) -> String? {
+        var parts: [String] = []
+        if let approvedPlan, !approvedPlan.isEmpty {
+            parts.append("the user watched and approved this plan; follow it step by step, adapting only if the screen differs:\n" + approvedPlan.map(\.promptLine).joined(separator: "\n"))
+        }
+        if let research { parts.append(research.asPromptText) }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
+    }
+
+    // MARK: - Agent rehearsal (ghost run)
+
+    /// Plans the task, acts it out with a translucent cursor over the real screen
+    /// (each step annotated), then waits for "go", a change, or "cancel".
+    private func rehearseAgentTask(task: String, redirect: String?, previousNotes: ResearchNotes?, screenAnalysis: ScreenAnalysis, report: inout SounderInteractionReport) async throws {
+        report.modeUsed = "Rehearsal"
+        report.analysisTask = "rehearse"
+        var researchNotes = previousNotes
+        if researchNotes == nil, ResearchAgent.needsResearch(for: task) {
+            presentCaption("researching how to do that…")
+            researchNotes = try? await researchAgent.research(task: task)
+        }
+        presentCaption("planning…")
+        let planStartedAt = Date()
+        let plan = try await agentModePipeline.plan(task: task, researchNotes: researchNotes?.asPromptText, userContextText: userContextForCurrentInteraction?.promptText,
+                                                     redirect: redirect, capture: screenAnalysis.capture, elements: screenAnalysis.elements)
+        report.planSeconds = Date().timeIntervalSince(planStartedAt)
+        try Task.checkCancellation()
+        guard !plan.steps.isEmpty else {
+            try await speak("i couldn't work out a plan for that.")
+            return
+        }
+        print("🎬 rehearsal: \(plan.steps.count) steps\n  " + plan.steps.map(\.promptLine).joined(separator: "\n  "))
+
+        // Numbered route over the steps that target something visible now.
+        let elementsByID = Dictionary(uniqueKeysWithValues: screenAnalysis.elements.map { ($0.id, $0) })
+        let visibleSteps = plan.steps.compactMap { step -> (AgentPlanStep, ScreenElement)? in
+            guard let id = step.elementID, let element = elementsByID[id] else { return nil }
+            return (step, element)
+        }
+        if !visibleSteps.isEmpty {
+            let route = DrawingOpsBuilder.route(through: visibleSteps.map(\.1), labels: visibleSteps.dropLast().map { "\($0.0.number) · \($0.0.description)" }, currentStep: nil)
+            drawingLayerModel.show(route, geometry: screenAnalysis.capture.geometry, autoClearAfterSeconds: 60)
+        }
+        gesturePathPointsGlobal = []
+
+        // The ghost walks the plan: to each visible target with a pause, and hovers
+        // in place for steps that happen on screens not visible yet.
+        let geometry = screenAnalysis.capture.geometry
+        var ghostPoint = NSEvent.mouseLocation
+        let perStep = max(0.45, min(1.1, 5.0 / Double(plan.steps.count)))
+        for step in plan.steps {
+            try Task.checkCancellation()
+            if let id = step.elementID, let element = elementsByID[id] {
+                ghostPoint = geometry.globalAppKitPoint(fromCapturePixel: element.centerInCapturePixels)
+            } else {
+                ghostPoint = CGPoint(x: ghostPoint.x + 26, y: ghostPoint.y - 22)
+            }
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) {
+                ghostCursorGlobalPoint = ghostPoint
+                ghostStepLabel = "\(step.number) · \(step.description)"
+            }
+            try? await Task.sleep(nanoseconds: UInt64(perStep * 1_000_000_000))
+        }
+        ghostStepLabel = "say \u{201C}go\u{201D}, or tell me what to change"
+        pendingRehearsal = PendingRehearsal(task: task, steps: plan.steps, researchNotes: researchNotes, screenAnalysis: screenAnalysis)
+        report.metricText = "\(plan.steps.count) steps · \(visibleSteps.count) on screen"
+        try await speak(plan.spokenSummary + " say go, or tell me what to change.")
+
+        rehearsalTimeoutTask?.cancel()
+        rehearsalTimeoutTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 45_000_000_000)
+            guard !Task.isCancelled, let self, self.pendingRehearsal != nil else { return }
+            self.clearRehearsal()
+            self.presentCaption("plan expired. ask again when you're ready.")
+        }
+    }
+
+    private func clearRehearsal() {
+        rehearsalTimeoutTask?.cancel()
+        rehearsalTimeoutTask = nil
+        pendingRehearsal = nil
+        withAnimation(.easeOut(duration: 0.3)) {
+            ghostCursorGlobalPoint = nil
+            ghostStepLabel = ""
+        }
+    }
+
+    private func resolveRehearsal(_ rehearsal: PendingRehearsal, transcript: String, screenAnalysis: ScreenAnalysis, report: inout SounderInteractionReport) async throws {
+        let lowered = transcript.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: " .!"))
+        let goWords = ["go", "yes", "yeah", "yep", "do it", "go ahead", "run it", "okay go", "ok go", "looks good", "that's right", "proceed", "confirm"]
+        let cancelWords = ["cancel", "no", "nope", "stop", "never mind", "nevermind", "forget it", "don't", "abort"]
+        clearRehearsal()
+        if goWords.contains(where: { lowered == $0 || lowered.hasPrefix($0 + " ") }) {
+            print("🎬 rehearsal approved")
+            try await runAgentMode(task: rehearsal.task, firstScreenAnalysis: screenAnalysis, report: &report, approvedPlan: rehearsal.steps, notes: rehearsal.researchNotes)
+        } else if cancelWords.contains(where: { lowered == $0 || lowered.hasPrefix($0 + " ") }) {
+            report.modeUsed = "Rehearsal"
+            report.analysisTask = "cancelled"
+            drawingLayerModel.clear()
+            try await speak("okay, dropped it.")
+        } else {
+            // Anything else is a redirect: re-plan with the instruction and rehearse again.
+            print("🎬 rehearsal redirect: \(transcript)")
+            drawingLayerModel.clear()
+            try await rehearseAgentTask(task: rehearsal.task, redirect: transcript, previousNotes: rehearsal.researchNotes, screenAnalysis: screenAnalysis, report: &report)
+        }
+    }
+
     private func runAgentMode(
         task: String,
         firstScreenAnalysis: ScreenAnalysis,
-        report: inout SounderInteractionReport
+        report: inout SounderInteractionReport,
+        approvedPlan: [AgentPlanStep]? = nil,
+        notes: ResearchNotes? = nil
     ) async throws {
         report.modeUsed = "Agent"
 
         // Unfamiliar app → quick web research first. The plan only feeds the agent's
         // prompt; the user sees a caption, never the sources or the step list.
-        var researchNotes: ResearchNotes?
-        if ResearchAgent.needsResearch(for: task) {
+        var researchNotes: ResearchNotes? = notes
+        if researchNotes == nil, ResearchAgent.needsResearch(for: task) {
             presentCaption("researching how to do that…")
             let researchStartedAt = Date()
             researchNotes = try? await researchAgent.research(task: task)
@@ -1375,7 +1767,7 @@ final class CompanionManager: ObservableObject {
             try Task.checkCancellation()
             let decisionStartedAt = Date()
             let action = try await agentModePipeline.decideNextAction(
-                task: task, researchNotes: researchNotes?.asPromptText, userContextText: userContextForCurrentInteraction?.promptText,
+                task: task, researchNotes: Self.agentNotes(research: researchNotes, approvedPlan: approvedPlan), userContextText: userContextForCurrentInteraction?.promptText,
                 stepNumber: stepNumber, history: history,
                 capture: screenAnalysis.capture, elements: screenAnalysis.elements
             )
@@ -1668,7 +2060,7 @@ final class CompanionManager: ObservableObject {
     // MARK: - Caption
 
     private func presentCaption(_ text: String) {
-        guard isCaptionEnabled else { return }
+        guard isCaptionEnabled, !isReadingAloud else { return }
         captionRevealTimer?.invalidate()
         captionHideTask?.cancel()
         captionFullText = text

@@ -18,6 +18,11 @@ nonisolated enum DrawingColor: Sendable {
     case green
 }
 
+nonisolated struct TextBlockSegment: Sendable, Hashable {
+    let text: String
+    let isChanged: Bool
+}
+
 nonisolated enum DrawingPrimitive: Identifiable, Sendable {
     /// Rounded-rect stroke around a row (or any box), optionally with a numbered tag.
     case circle(id: String, rectInCapturePixels: CGRect, tagNumber: Int?, color: DrawingColor)
@@ -42,13 +47,18 @@ nonisolated enum DrawingPrimitive: Identifiable, Sendable {
     case arrow(id: String, fromRectInCapturePixels: CGRect, toRectInCapturePixels: CGRect, number: Int, label: String?, color: DrawingColor, emphasis: Int)
     /// Text painted exactly over a box on a patch that matches the page behind it (translate in place).
     case textPatch(id: String, rectInCapturePixels: CGRect, text: String, backgroundRed: Double, backgroundGreen: Double, backgroundBlue: Double, usesDarkText: Bool)
+    /// A wrapped paragraph painted over a block, with changed spans marked (rewrite in place).
+    case textBlock(id: String, rectInCapturePixels: CGRect, segments: [TextBlockSegment], lineHeightInCapturePixels: CGFloat, backgroundRed: Double, backgroundGreen: Double, backgroundBlue: Double, usesDarkText: Bool)
+    /// A vertical bar in the left margin of a line (a heading marker).
+    case marginBar(id: String, rectInCapturePixels: CGRect, color: DrawingColor)
 
     var id: String {
         switch self {
         case .circle(let id, _, _, _), .bar(let id, _, _), .polyline(let id, _, _),
              .band(let id, _, _, _), .highlight(let id, _, _), .badge(let id, _, _),
              .link(let id, _, _, _, _), .underline(let id, _, _), .footnoteDrawer(let id, _),
-             .arrow(let id, _, _, _, _, _, _), .textPatch(let id, _, _, _, _, _, _):
+             .arrow(let id, _, _, _, _, _, _), .textPatch(let id, _, _, _, _, _, _),
+             .textBlock(let id, _, _, _, _, _, _, _), .marginBar(let id, _, _):
             return id
         }
     }

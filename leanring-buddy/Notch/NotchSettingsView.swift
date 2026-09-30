@@ -106,6 +106,8 @@ struct NotchSettingsView: View {
                                    isOn: companionManager.isClickyCursorEnabled) { companionManager.setClickyCursorEnabled($0) }
                     NotchToggleRow(title: "Clipboard fallback", detail: "Copy a table when reading it off the screen is unsure.",
                                    isOn: companionManager.isClipboardFallbackEnabled) { companionManager.setClipboardFallbackEnabled($0) }
+                    NotchToggleRow(title: "Rehearse before acting", detail: "Agent tasks are acted out by a ghost cursor first. Say \u{201C}go\u{201D} to run, or tell it what to change.",
+                                   isOn: companionManager.isAgentRehearsalEnabled) { companionManager.setAgentRehearsalEnabled($0) }
                 }
             }
 

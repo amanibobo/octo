@@ -289,6 +289,35 @@ struct BlueCursorView: View {
             // highlights). Rendered beneath the cursor so the buddy stays on top.
             DrawingLayerView(model: companionManager.drawingLayerModel, screenFrame: screenFrame)
 
+            // Agent rehearsal: a translucent ghost of the buddy walks the plan.
+            if let ghostPoint = companionManager.ghostCursorGlobalPoint, screenFrame.contains(ghostPoint) {
+                let local = convertScreenPointToSwiftUICoordinates(ghostPoint)
+                VStack(spacing: 6) {
+                    BuddySquareSpriteView()
+                        .scaleEffect(1.5)
+                        .opacity(0.5)
+                        .overlay(
+                            Circle()
+                                .stroke(DS.Colors.overlayCursorBlue.opacity(0.7), style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+                                .frame(width: 44, height: 44)
+                        )
+                        .shadow(color: DS.Colors.overlayCursorBlue.opacity(0.5), radius: 10)
+                    if !companionManager.ghostStepLabel.isEmpty {
+                        Text(companionManager.ghostStepLabel)
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Capsule().fill(Color.black.opacity(0.8)).overlay(Capsule().stroke(DS.Colors.overlayCursorBlue.opacity(0.7), lineWidth: 1)))
+                            .fixedSize()
+                    }
+                }
+                .position(x: local.x, y: local.y + 18)
+                .animation(.spring(response: 0.5, dampingFraction: 0.8), value: ghostPoint)
+                .transition(.opacity)
+                .allowsHitTesting(false)
+            }
+
             // Spatial context: a comet trail behind the cursor while the hotkey is
             // held. Each segment fades and thins with age, so the trail drags a
             // little behind the pointer and dissolves on its own.

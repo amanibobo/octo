@@ -158,6 +158,17 @@ nonisolated enum AccessibilityElementReader {
         return CGRect(origin: position, size: size)
     }
 
+    /// Frame of the frontmost app's focused window in global CG points, if any.
+    static func focusedWindowFrameCG() -> CGRect? {
+        guard AXIsProcessTrusted(), let frontmost = NSWorkspace.shared.frontmostApplication else { return nil }
+        let application = AXUIElementCreateApplication(frontmost.processIdentifier)
+        AXUIElementSetMessagingTimeout(application, 0.25)
+        var focusedValue: AnyObject?
+        guard AXUIElementCopyAttributeValue(application, kAXFocusedWindowAttribute as CFString, &focusedValue) == .success,
+              let focused = focusedValue, CFGetTypeID(focused) == AXUIElementGetTypeID() else { return nil }
+        return frameOf(focused as! AXUIElement)
+    }
+
     // MARK: - Actions
 
     /// Presses the element through AX (exact, no pointer needed). False if the app refused.
