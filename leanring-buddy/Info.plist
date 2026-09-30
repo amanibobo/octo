@@ -29,6 +29,8 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Octo uses the camera only when you ask it to read something you hold up to it</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Octo uses your microphone so you can ask questions about what is on your screen</string>
 	<key>NSScreenCaptureUsageDescription</key>

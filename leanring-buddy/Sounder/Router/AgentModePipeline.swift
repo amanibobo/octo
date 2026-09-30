@@ -36,6 +36,14 @@ struct AgentAction {
     let narration: String
     let isTaskComplete: Bool
     let completionSummary: String?
+    /// What the screen should show once this step has worked (kept in history).
+    let expectedOutcome: String?
+}
+
+struct AgentVerdict {
+    let isAchieved: Bool
+    let evidence: String
+    let nextHint: String?
 }
 
 @MainActor
@@ -60,11 +68,15 @@ final class AgentModePipeline {
     }
 
     private static let systemPrompt = """
-    you are octo, an assistant that operates the user's mac to carry out a spoken task. you see a screenshot with numbered red tags and the list of those elements (id → text). the frontmost app is named. decide the single best next action.
+    you are octo, an assistant that operates the user's mac to carry out a spoken task. you see a screenshot with numbered red tags and the list of those elements (id → role: text). the frontmost app is named. decide the single best next action.
 
-    actions: open_app (app name), open_url (a url or url scheme, e.g. spotify:search:matches che), click (element_id), double_click (element_id), type (text; only after a text field is focused), press_keys (a combo like cmd+l, enter, escape, space, down), scroll (element_id near where to scroll, scroll_lines negative = down), wait (let the ui settle), done (task complete or impossible; give completion_summary).
+    elements marked with a role (button, textfield, link, menuitem, row, popup, checkbox) come from the accessibility tree: their labels and positions are exact and clicking them always lands. plain "text" elements come from ocr and are approximate. prefer the accessibility element when both describe the same thing.
 
-    rules: one action per turn. prefer app search fields and enter over clicking many things. in spotify, cmd+l focuses search; a search result row can be clicked, then space or the play control plays it. never enter passwords or payment details; if a login or payment screen appears, return done and say so. only use element ids from the list. narration is a short lowercase phrase shown to the user while you act, e.g. "opening spotify", "typing the song name", "clicking the first result". if research notes are provided, follow them.
+    actions: open_app (app name), open_url (a url or url scheme, e.g. spotify:search:matches che), click (element_id), double_click (element_id), type (text; only after a text field is focused, or with element_id of a textfield to focus it first), press_keys (a combo like cmd+l, enter, escape, space, down), scroll (element_id near where to scroll, scroll_lines negative = down), wait (let the ui settle), done (task complete or impossible; give completion_summary).
+
+    rules: one action per turn. never say done on hope: done means the screenshot already shows the result (the song title in the now-playing bar, the page loaded, the message sent). if the evidence is not on screen yet, take the next action instead. before each action fill expected_outcome with what the next screenshot should show if it worked; if the last expected outcome did not appear, do something different rather than repeating. prefer app search fields and enter over clicking many things. never enter passwords or payment details; if a login or payment screen appears, return done and say so. only use element ids from the list. narration is a short lowercase phrase shown to the user while you act, e.g. "opening spotify", "typing the song name", "clicking the first result". if research notes are provided, follow them.
+
+    spotify playbook: open_url spotify:search:<song> <artist> (one action) → wait → in the results, click the accessibility button whose label starts with "Play" for the top song, or click the top result row then press_keys enter → verify: the bottom now-playing bar shows the song title; only then done. if the wrong track is playing, search again with the artist name added.
     """
 
     private static let actionSchema: [String: Any] = [
@@ -78,10 +90,42 @@ final class AgentModePipeline {
             "scroll_lines": ["type": ["integer", "null"]],
             "narration": ["type": "string"],
             "task_complete": ["type": "boolean"],
-            "completion_summary": ["type": ["string", "null"]]
+            "completion_summary": ["type": ["string", "null"]],
+            "expected_outcome": ["type": ["string", "null"]]
         ],
-        "required": ["action", "element_id", "text", "app", "keys", "scroll_lines", "narration", "task_complete", "completion_summary"]
+        "required": ["action", "element_id", "text", "app", "keys", "scroll_lines", "narration", "task_complete", "completion_summary", "expected_outcome"]
     ]
+
+    private static let verdictSchema: [String: Any] = [
+        "type": "object",
+        "properties": [
+            "achieved": ["type": "boolean"],
+            "evidence": ["type": "string"],
+            "next_hint": ["type": ["string", "null"]]
+        ],
+        "required": ["achieved", "evidence", "next_hint"]
+    ]
+
+    /// Looks at a fresh screenshot and decides whether the task's outcome is visible.
+    func verifyCompletion(task: String, claimedSummary: String, capture: SounderScreenCapture, elements: [ScreenElement]) async throws -> AgentVerdict {
+        let groundingElements = Array(elements.prefix(Self.maximumElementsSentToModel))
+        var images: [ChatModelImage] = []
+        if let marked = SetOfMarkRenderer.renderMarkedScreenshot(capture: capture.cgImage, elements: groundingElements, maximumWidth: 1280) {
+            images.append(ChatModelImage(data: marked.data, mimeType: "image/jpeg"))
+        }
+        let elementListText = groundingElements.map { "[\($0.id)] \(Self.roleLabel($0)): \(String($0.text.prefix(60)))" }.joined(separator: "\n")
+        let object = try await chatClient.completeJSON(
+            systemPrompt: "you are a strict verifier. given a task, an agent's claim that it is done, and the current screenshot with its elements, decide whether the screen itself proves the task is complete. be concrete: for \"play X\" the now-playing bar must show X (not a different track, not just search results); for \"open Y\" Y must be the frontmost window; for \"send\" the message must appear as sent. evidence is one sentence describing exactly what you see. if not achieved, next_hint is one concrete next action.",
+            userText: "task: \"\(task)\"\nagent claims: \"\(claimedSummary)\"\nfrontmost app: \(MacControl.frontmostApplicationName())\n\nelements on screen:\n\(elementListText)",
+            images: images, priorTurns: [], jsonSchema: Self.verdictSchema, maxTokens: 250, timeoutSeconds: 25)
+        return AgentVerdict(isAchieved: (object["achieved"] as? Bool) ?? false,
+                            evidence: (object["evidence"] as? String) ?? "no evidence",
+                            nextHint: object["next_hint"] as? String)
+    }
+
+    static func roleLabel(_ element: ScreenElement) -> String {
+        element.kind.hasPrefix("ax:") ? String(element.kind.dropFirst(3)) : "text"
+    }
 
     func decideNextAction(
         task: String,
@@ -97,7 +141,7 @@ final class AgentModePipeline {
         if let marked = SetOfMarkRenderer.renderMarkedScreenshot(capture: capture.cgImage, elements: groundingElements, maximumWidth: 1280) {
             images.append(ChatModelImage(data: marked.data, mimeType: "image/jpeg"))
         }
-        let elementListText = groundingElements.map { "[\($0.id)] \(String($0.text.prefix(60)))" }.joined(separator: "\n")
+        let elementListText = groundingElements.map { "[\($0.id)] \(Self.roleLabel($0)): \(String($0.text.prefix(60)))" }.joined(separator: "\n")
         let historyText = history.isEmpty ? "(none yet)" : history.joined(separator: "\n")
         let researchText = researchNotes.map { "research notes on how to do this:\n\($0)\n\n" } ?? ""
         let contextText = userContextText.map { $0 + "\n\n" } ?? ""
@@ -122,12 +166,13 @@ final class AgentModePipeline {
             scrollLines: object["scroll_lines"] as? Int,
             narration: (object["narration"] as? String) ?? kind.rawValue,
             isTaskComplete: (object["task_complete"] as? Bool) ?? (kind == .done),
-            completionSummary: object["completion_summary"] as? String
+            completionSummary: object["completion_summary"] as? String,
+            expectedOutcome: object["expected_outcome"] as? String
         )
     }
 
     /// Executes one action. Returns a one-line history entry.
-    func execute(_ action: AgentAction, elements: [ScreenElement], geometry: CaptureGeometry) async -> String {
+    func execute(_ action: AgentAction, elements: [ScreenElement], accessibilityElementsByID: [Int: AccessibilityElement] = [:], geometry: CaptureGeometry) async -> String {
         let elementsByID = Dictionary(uniqueKeysWithValues: elements.map { ($0.id, $0) })
         func center(of elementID: Int?) -> CGPoint? {
             guard let elementID, let element = elementsByID[elementID] else { return nil }
@@ -145,9 +190,22 @@ final class AgentModePipeline {
             guard let elementID = action.elementID, let point = center(of: elementID) else {
                 return "\(action.kind.rawValue) element \(action.elementID ?? -1) → no such element"
             }
+            // Accessibility elements are pressed through AX: exact, and it works even
+            // when the pointer would land on a tooltip or an overlapping view.
+            if action.kind == .click, let accessibilityElement = accessibilityElementsByID[elementID], accessibilityElement.isPressable,
+               AccessibilityElementReader.press(accessibilityElement) {
+                return "press [\(elementID)] \(accessibilityElement.shortRole) \(accessibilityElement.label.prefix(30)) (ax)"
+            }
             MacControl.click(atGlobalAppKitPoint: point, doubleClick: action.kind == .doubleClick)
             return "\(action.kind.rawValue) [\(elementID)] \(elementsByID[elementID]?.text.prefix(30) ?? "")"
         case .type:
+            if let elementID = action.elementID, let accessibilityElement = accessibilityElementsByID[elementID], accessibilityElement.isTextInput {
+                AccessibilityElementReader.focus(accessibilityElement)
+                try? await Task.sleep(nanoseconds: 150_000_000)
+            } else if let elementID = action.elementID, let point = center(of: elementID) {
+                MacControl.click(atGlobalAppKitPoint: point)
+                try? await Task.sleep(nanoseconds: 150_000_000)
+            }
             MacControl.typeText(action.text ?? "")
             return "type \"\(action.text ?? "")\""
         case .pressKeys:

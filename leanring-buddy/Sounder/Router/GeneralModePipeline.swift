@@ -33,6 +33,33 @@ final class GeneralModePipeline {
     private let chatClient: any ChatModelClient
     private static let maximumElementsSentToModel = 100
 
+    private static let cameraAnswerSchema: [String: Any] = [
+        "type": "object",
+        "properties": ["speak": ["type": "string"], "key_line_indices": ["type": "array", "items": ["type": "integer"]]],
+        "required": ["speak", "key_line_indices"]
+    ]
+
+    /// Answers about something held up to the webcam: the frame plus its OCR lines.
+    /// Returns the spoken answer and the indices of the lines it leaned on.
+    func answerAboutCameraFrame(transcript: String, frameJPEG: Data, textLines: [String], userContext: UserContextBundle?) async throws -> (spokenText: String, keyLineIndices: [Int]) {
+        let numbered = textLines.enumerated().map { "[\($0.offset)] \($0.element)" }.joined(separator: "\n")
+        var userText = ""
+        if let userContext { userText += userContext.promptText + "\n\n" }
+        userText += "the user is holding something up to the webcam (a page, a whiteboard, a label). text read from it:\n\(numbered.isEmpty ? "(no text recognized)" : numbered)\n\nuser said: \"\(transcript)\""
+        let object = try await chatClient.completeJSON(
+            systemPrompt: "you're octo. describe or answer about what the user is holding up to the camera, using the image and the recognized text. spoken reply: one to three short sentences, lowercase, no lists. if they asked you to read it, read the important lines back in order, condensed. key_line_indices are the indices of the recognized lines your answer relies on (up to 8).",
+            userText: userText,
+            images: [ChatModelImage(data: frameJPEG, mimeType: "image/jpeg")] + (userContext?.images ?? []),
+            priorTurns: [],
+            jsonSchema: Self.cameraAnswerSchema,
+            maxTokens: 500,
+            timeoutSeconds: 25
+        )
+        let spoken = ((object["speak"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let indices = ((object["key_line_indices"] as? [Int]) ?? []).filter { $0 >= 0 && $0 < textLines.count }
+        return (spoken.isEmpty ? "i can see it, but i couldn't make out much." : spoken, indices)
+    }
+
     init(chatClient: any ChatModelClient) {
         self.chatClient = chatClient
     }

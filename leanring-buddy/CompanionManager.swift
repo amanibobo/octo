@@ -14,6 +14,7 @@ import Combine
 import Foundation
 import ScreenCaptureKit
 import SwiftUI
+import Vision
 
 enum CompanionVoiceState {
     case idle
@@ -107,6 +108,8 @@ final class CompanionManager: ObservableObject {
     private let whiteboardPanelManager = WhiteboardPanelManager()
     /// Translate in place.
     private let translatePipeline: TranslatePipeline
+    /// Camera as context: live webcam preview + OCR on a grabbed frame.
+    private let cameraContextPanelManager = CameraContextPanelManager()
     /// Guided path: a numbered route the user clicks through; lights up as they go.
     private var guidedRouteElements: [ScreenElement] = []
     private var guidedRouteLabels: [String] = []
@@ -148,11 +151,52 @@ final class CompanionManager: ObservableObject {
     private struct ScreenAnalysis {
         let capture: SounderScreenCapture
         let textLines: [RecognizedTextLine]
+        /// OCR lines plus accessibility elements (kind "ax:<role>"), one id space.
         let elements: [ScreenElement]
+        /// The accessibility handles behind the "ax:" elements, by element id.
+        let accessibilityElementsByID: [Int: AccessibilityElement]
         let clinicalReading: ClinicalScreenReading
         let regionOfInterestInCapturePixels: CGRect?
         let captureSeconds: Double
         let ocrSeconds: Double
+    }
+
+    /// Accessibility elements of the frontmost app, converted to capture pixels and
+    /// appended after the OCR elements. Static text that OCR already found is
+    /// skipped; controls are always kept because their role and label are exact.
+    private static func mergeAccessibilityElements(into ocrElements: [ScreenElement], capture: SounderScreenCapture) async -> ([ScreenElement], [Int: AccessibilityElement]) {
+        let displayFrame = capture.geometry.displayFrame
+        guard let primaryScreen = NSScreen.screens.first else { return (ocrElements, [:]) }
+        // AX frames are global CG points (top-left of the primary display).
+        let displayFrameCG = CGRect(x: displayFrame.minX, y: primaryScreen.frame.maxY - displayFrame.maxY, width: displayFrame.width, height: displayFrame.height)
+        let accessibilityElements = await Task.detached(priority: .userInitiated) {
+            AccessibilityElementReader.elements(intersecting: displayFrameCG, maximum: 80)
+        }.value
+        guard !accessibilityElements.isEmpty else { return (ocrElements, [:]) }
+
+        let pixelsPerPoint = CGFloat(capture.cgImage.width) / max(displayFrame.width, 1)
+        var merged = Array(ocrElements.prefix(100))
+        var byID: [Int: AccessibilityElement] = [:]
+        var nextID = (ocrElements.map(\.id).max() ?? 0) + 1
+        for accessibilityElement in accessibilityElements {
+            let frameCG = accessibilityElement.frameInGlobalCGPoints
+            let box = CGRect(x: (frameCG.minX - displayFrameCG.minX) * pixelsPerPoint, y: (frameCG.minY - displayFrameCG.minY) * pixelsPerPoint,
+                             width: frameCG.width * pixelsPerPoint, height: frameCG.height * pixelsPerPoint)
+            if accessibilityElement.shortRole == "text" {
+                // Skip static text OCR already has (same words, overlapping box).
+                let duplicate = ocrElements.contains { ocr in
+                    ocr.boundingBoxInCapturePixels.intersects(box) && ocr.text.lowercased().contains(accessibilityElement.label.lowercased().prefix(20))
+                }
+                if duplicate { continue }
+            }
+            let element = ScreenElement(id: nextID, kind: "ax:" + accessibilityElement.shortRole, text: accessibilityElement.label,
+                                        boundingBoxInCapturePixels: box, confidence: 1)
+            merged.append(element)
+            byID[nextID] = accessibilityElement
+            nextID += 1
+            if merged.count >= 160 { break }
+        }
+        return (merged, byID)
     }
 
     /// Capture + OCR started the moment the hotkey is released, so it runs while
@@ -768,6 +812,20 @@ final class CompanionManager: ObservableObject {
                 return
             }
 
+            // Camera as context: something held up to the webcam.
+            if let cameraRequest = CameraIntent.detect(transcript, hasRegion: screenAnalysis.regionOfInterestInCapturePixels != nil) {
+                try await runCamera(request: cameraRequest, transcript: transcript, report: &report)
+                finishReport(&report, startedAt: interactionStartedAt)
+                return
+            }
+
+            // "read me this dialog": the focused window through the accessibility tree.
+            if DialogReaderIntent.matches(transcript) {
+                try await runDialogReader(screenAnalysis: screenAnalysis, report: &report)
+                finishReport(&report, startedAt: interactionStartedAt)
+                return
+            }
+
             // Translate in place: the circled lines, or every foreign line on screen.
             if let translateRequest = TranslateIntent.detect(transcript) {
                 try await runTranslate(request: translateRequest, screenAnalysis: screenAnalysis, report: &report)
@@ -1000,6 +1058,95 @@ final class CompanionManager: ObservableObject {
         guidedRouteStep = 0
     }
 
+    // MARK: - Camera as context
+
+    private func runCamera(request: CameraIntent.Request, transcript: String, report: inout SounderInteractionReport) async throws {
+        report.modeUsed = "Camera"
+        report.analysisTask = "camera"
+        if request == .close {
+            cameraContextPanelManager.hide()
+            try await speak("camera's off.")
+            return
+        }
+        presentCaption("looking through the camera…")
+        guard await cameraContextPanelManager.show() else {
+            try await speak("i can't use the camera. check camera access for octo in system settings.")
+            return
+        }
+        // A beat for exposure, then the newest frame.
+        try? await Task.sleep(nanoseconds: 900_000_000)
+        guard let frame = await cameraContextPanelManager.captureFrame() else {
+            try await speak("i'm not getting a picture from the camera.")
+            return
+        }
+        cameraContextPanelManager.setStatus("reading…")
+        let ocrStartedAt = Date()
+        let lines = try await Task.detached(priority: .userInitiated) {
+            try ScreenTextRecognizer.recognizeText(in: frame, recognitionLevel: .accurate, maximumWidth: 1600)
+        }.value
+        report.ocrSeconds = Date().timeIntervalSince(ocrStartedAt)
+        try Task.checkCancellation()
+        let orderedLines = lines.sorted { $0.boundingBoxInCapturePixels.minY < $1.boundingBoxInCapturePixels.minY }
+        cameraContextPanelManager.showRecognizedLines(orderedLines, frameSize: CGSize(width: frame.width, height: frame.height), status: "\(orderedLines.count) lines")
+        print("📷 camera frame \(frame.width)×\(frame.height): \(orderedLines.count) lines")
+
+        guard let jpeg = NativeScreenCaptureUtility.makeDownscaledJPEG(from: frame, maximumWidth: 1280, compressionQuality: 0.8) else {
+            try await speak("i couldn't read the frame.")
+            return
+        }
+        let answerStartedAt = Date()
+        let answer = try await generalModePipeline.answerAboutCameraFrame(transcript: transcript, frameJPEG: jpeg.data, textLines: orderedLines.map(\.text), userContext: userContextForCurrentInteraction)
+        report.planSeconds = Date().timeIntervalSince(answerStartedAt)
+        try Task.checkCancellation()
+        // Keep just the lines the answer used lit on the preview.
+        if !answer.keyLineIndices.isEmpty {
+            cameraContextPanelManager.showRecognizedLines(answer.keyLineIndices.map { orderedLines[$0] }, frameSize: CGSize(width: frame.width, height: frame.height), status: "\(orderedLines.count) lines")
+        }
+        // What the camera saw stays in the conversation as pinned context.
+        let cameraText = orderedLines.map(\.text).joined(separator: "\n")
+        if cameraText.count >= 12 {
+            userContextStore.addText("from the camera:\n" + String(cameraText.prefix(1500)))
+        }
+        conversationHistory.append(ChatModelPriorTurn(userText: transcript, assistantText: answer.spokenText))
+        report.metricText = "\(orderedLines.count) lines · \(frame.width)×\(frame.height)"
+        cameraContextPanelManager.scheduleHide(afterSeconds: 60)
+        try await speak(answer.spokenText)
+    }
+
+    // MARK: - Read me this dialog (accessibility)
+
+    private func runDialogReader(screenAnalysis: ScreenAnalysis, report: inout SounderInteractionReport) async throws {
+        report.modeUsed = "Read"
+        report.analysisTask = "read-dialog"
+        let summary = await Task.detached(priority: .userInitiated) { AccessibilityElementReader.focusedWindowSummary() }.value
+        guard let summary, !(summary.texts.isEmpty && summary.buttons.isEmpty) else {
+            // No accessibility tree (web canvas, game): fall back to reading the OCR lines.
+            let lines = screenAnalysis.textLines.prefix(12).map(\.text)
+            try await speak(lines.isEmpty ? "i can't find anything readable in the front window." : "the window says: " + lines.joined(separator: ". "))
+            return
+        }
+        // Highlight what is being read, in order.
+        let capture = screenAnalysis.capture
+        let displayFrame = capture.geometry.displayFrame
+        if let primaryScreen = NSScreen.screens.first {
+            let displayFrameCG = CGRect(x: displayFrame.minX, y: primaryScreen.frame.maxY - displayFrame.maxY, width: displayFrame.width, height: displayFrame.height)
+            let pixelsPerPoint = CGFloat(capture.cgImage.width) / max(displayFrame.width, 1)
+            let rects = summary.elements.prefix(30).map { element -> CGRect in
+                let frame = element.frameInGlobalCGPoints
+                return CGRect(x: (frame.minX - displayFrameCG.minX) * pixelsPerPoint, y: (frame.minY - displayFrameCG.minY) * pixelsPerPoint,
+                              width: frame.width * pixelsPerPoint, height: frame.height * pixelsPerPoint)
+            }
+            drawingLayerModel.show(DrawingOpsBuilder.highlightCells(rects: rects), geometry: capture.geometry, autoClearAfterSeconds: 25)
+        }
+        var spoken = "\(summary.title). "
+        let texts = summary.texts.prefix(14).joined(separator: ". ")
+        if !texts.isEmpty { spoken += texts + ". " }
+        if !summary.buttons.isEmpty { spoken += "buttons: " + summary.buttons.prefix(8).joined(separator: ", ") + "." }
+        report.metricText = "\(summary.texts.count) texts · \(summary.buttons.count) controls"
+        print("♿️ read dialog: \(summary.title) · \(summary.texts.count) texts · \(summary.buttons.count) controls")
+        try await speak(spoken)
+    }
+
     // MARK: - Translate in place
 
     private func runTranslate(request: TranslateRequest, screenAnalysis: ScreenAnalysis, report: inout SounderInteractionReport) async throws {
@@ -1223,6 +1370,7 @@ final class CompanionManager: ObservableObject {
         var screenAnalysis = firstScreenAnalysis
         var history: [String] = []
         var completionSummary = "i ran out of steps before finishing that."
+        var verificationAttempts = 0
         for stepNumber in 1...AgentModePipeline.maximumSteps {
             try Task.checkCancellation()
             let decisionStartedAt = Date()
@@ -1236,7 +1384,25 @@ final class CompanionManager: ObservableObject {
             print("🤖 step \(stepNumber): \(action.kind.rawValue) \(action.elementID.map { "[\($0)]" } ?? "") \(action.text ?? action.app ?? action.keys ?? "") — \(action.narration)")
 
             if action.kind == .done || action.isTaskComplete {
-                completionSummary = action.completionSummary ?? action.narration
+                // Trust, but verify: a fresh screenshot must show the outcome before
+                // the buddy says it is done. Otherwise the verifier's hint goes into
+                // the history and the loop continues.
+                if verificationAttempts < 2 {
+                    verificationAttempts += 1
+                    try? await Task.sleep(nanoseconds: 900_000_000)
+                    let checkAnalysis = try await makeScreenAnalysisTask().value
+                    let verdict = try await agentModePipeline.verifyCompletion(task: task, claimedSummary: action.completionSummary ?? action.narration, capture: checkAnalysis.capture, elements: checkAnalysis.elements)
+                    print("🔍 verify: \(verdict.isAchieved ? "achieved" : "NOT achieved") — \(verdict.evidence)")
+                    if !verdict.isAchieved, stepNumber < AgentModePipeline.maximumSteps {
+                        history.append("\(stepNumber). claimed done, but the screen shows: \(verdict.evidence). next: \(verdict.nextHint ?? "keep going")")
+                        presentCaption("not there yet…")
+                        screenAnalysis = checkAnalysis
+                        continue
+                    }
+                    completionSummary = verdict.isAchieved ? (action.completionSummary ?? action.narration) : "i tried, but \(verdict.evidence)"
+                } else {
+                    completionSummary = action.completionSummary ?? action.narration
+                }
                 history.append("done: \(completionSummary)")
                 break
             }
@@ -1261,8 +1427,8 @@ final class CompanionManager: ObservableObject {
                 drawingLayerModel.show(stepPrimitives, geometry: screenAnalysis.capture.geometry, autoClearAfterSeconds: 30)
             }
 
-            let historyEntry = await agentModePipeline.execute(action, elements: screenAnalysis.elements, geometry: screenAnalysis.capture.geometry)
-            history.append("\(stepNumber). \(historyEntry)")
+            let historyEntry = await agentModePipeline.execute(action, elements: screenAnalysis.elements, accessibilityElementsByID: screenAnalysis.accessibilityElementsByID, geometry: screenAnalysis.capture.geometry)
+            history.append("\(stepNumber). \(historyEntry)\(action.expectedOutcome.map { " (expected: \($0))" } ?? "")")
             report.analysisTask = "agent · \(stepNumber) steps"
 
             try? await Task.sleep(nanoseconds: AgentModePipeline.settleDelayNanoseconds(after: action))
@@ -1644,7 +1810,9 @@ final class CompanionManager: ObservableObject {
             let ocrSeconds = Date().timeIntervalSince(ocrStartedAt)
             try Task.checkCancellation()
 
-            let elements = ScreenElementDetector.makeElements(from: textLines)
+            let ocrElements = ScreenElementDetector.makeElements(from: textLines)
+            let (elements, accessibilityElementsByID) = await Self.mergeAccessibilityElements(into: ocrElements, capture: capture)
+            if !accessibilityElementsByID.isEmpty { print("♿️ \(accessibilityElementsByID.count) accessibility elements merged") }
             let clinicalReading = ClinicalEntityExtractor.extract(from: textLines, lexicon: clinicalLexicon)
 
             // Region of interest from the circle gesture, in capture pixels.
@@ -1667,7 +1835,7 @@ final class CompanionManager: ObservableObject {
             if !clinicalReading.isEmpty {
                 print("💊 Chart: \(clinicalReading.medications.count) meds \(clinicalReading.medications.map { "\($0.name) \($0.doseMilligrams.map { "\($0)mg" } ?? "")×\($0.dosesPerDay ?? 0)" }), \(clinicalReading.conditions.count) conditions \(clinicalReading.conditions.map(\.canonicalName)), labs \(clinicalReading.labs.map { "\($0.key)=\($0.value)" }), age \(clinicalReading.ageYears ?? -1) \(clinicalReading.sex ?? "")")
             }
-            return ScreenAnalysis(capture: capture, textLines: textLines, elements: elements,
+            return ScreenAnalysis(capture: capture, textLines: textLines, elements: elements, accessibilityElementsByID: accessibilityElementsByID,
                                   clinicalReading: clinicalReading, regionOfInterestInCapturePixels: regionOfInterest,
                                   captureSeconds: captureSeconds, ocrSeconds: ocrSeconds)
         }

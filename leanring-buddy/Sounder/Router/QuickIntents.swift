@@ -287,3 +287,40 @@ enum DictateIntent {
         return nil
     }
 }
+
+
+// MARK: - Read me this dialog
+
+enum DialogReaderIntent {
+    private static let phrases = ["read me this", "read this dialog", "read the dialog", "read this window", "read this alert", "read this popup",
+                                  "what does this dialog say", "what does this window say", "what does this alert say", "read the screen to me",
+                                  "read me the screen", "what are my options here", "what buttons are there", "read this out"]
+
+    static func matches(_ transcript: String) -> Bool {
+        let lowered = transcript.lowercased()
+        return phrases.contains { lowered.contains($0) }
+    }
+}
+
+
+// MARK: - Camera as context
+
+enum CameraIntent {
+    private static let onPhrases = ["camera", "webcam", "what am i holding", "what i'm holding", "what im holding", "hold up", "holding up",
+                                    "read this page", "read this book", "read this label", "read this whiteboard", "read the whiteboard",
+                                    "look at this page", "look at what", "see this", "can you see this", "read what i", "look at this"]
+    private static let offPhrases = ["camera off", "close the camera", "close camera", "hide the camera", "stop the camera", "turn off the camera"]
+
+    enum Request {
+        case look
+        case close
+    }
+
+    static func detect(_ transcript: String, hasRegion: Bool) -> Request? {
+        let lowered = transcript.lowercased()
+        if offPhrases.contains(where: { lowered.contains($0) }) { return .close }
+        // "look at this" with a circled region means the screen, not the camera.
+        if hasRegion { return lowered.contains("camera") || lowered.contains("webcam") ? .look : nil }
+        return onPhrases.contains(where: { lowered.contains($0) }) ? .look : nil
+    }
+}

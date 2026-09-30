@@ -74,6 +74,12 @@ Worker vars: `FIREWORKS_CHAT_MODEL`, `FIREWORKS_TRANSCRIPTION_MODEL`, `ELEVENLAB
 
 **Translate in place**: `TranslateIntent` ("translate this to spanish", "in english") → OCR lines in the circled region, or every line whose `NLLanguageRecognizer` language differs from the target → `TranslatePipeline` (Claude JSON, one translation per index) → `.textPatch` primitives painted over each line at its size, on a background sampled by `BackgroundColorSampler` from the strips just above and below the box, with dark/light text chosen by luminance.
 
+**Accessibility grounding**: `AccessibilityElementReader` walks the frontmost app's windows (and menu bar) through the AX API and returns labelled controls with frames in global CG points; `CompanionManager.mergeAccessibilityElements` converts them to capture pixels and appends them to the OCR elements as kind `ax:<role>` (static text OCR already found is skipped; up to 80 AX elements, 160 total). `ScreenAnalysis.accessibilityElementsByID` keeps the AX handles. Agent mode presses `ax:` elements with `AXPress` and focuses text fields via AX before typing, falling back to pointer clicks. "read me this dialog/window" (`DialogReaderIntent`) reads the focused window's texts and controls in reading order and highlights them.
+
+**Agent accuracy loop**: the decision schema carries `expected_outcome` (kept in history) and the prompt forbids "done" without on-screen evidence; when the model claims done, `verifyCompletion` looks at a fresh screenshot and returns `{achieved, evidence, next_hint}`; a failed verdict goes into the history and the loop continues (max 2 verifications). A Spotify playbook (search URL → play the top result → check the now-playing bar) is in the system prompt. Verified: "open spotify and play matches by che" played the right track in 7 steps, 47 s.
+
+**Camera as context**: `CameraIntent` ("what am i holding", "read this page", "camera") → `CameraContextPanelManager` shows a glass card with an unmirrored `AVCaptureVideoPreviewLayer`, grabs the newest frame from an `AVCaptureVideoDataOutput`, runs accurate Vision OCR, draws the recognized lines over the preview, and `GeneralModePipeline.answerAboutCameraFrame` answers from the frame + text; the OCR text is pinned as context and the card hides after 60 s. Needs `NSCameraUsageDescription`.
+
 **Glass cards**: `GlassCardBackground` (system `glassEffect` on macOS 26, `NSVisualEffectView` blur below) backs the rewind card.
 
 **Cursor Overlay**: A full-screen transparent `NSPanel` hosts the blue cursor companion. It's non-activating, joins all Spaces, and never steals focus. The cursor position, response text, waveform, and pointing animations all render in this overlay via SwiftUI through `NSHostingView`.
@@ -114,6 +120,8 @@ Worker vars: `FIREWORKS_CHAT_MODEL`, `FIREWORKS_TRANSCRIPTION_MODEL`, `ELEVENLAB
 | `Sounder/Router/QuickIntents.swift` | ~300 | Dictate / ink-math / extract intents, CSV·JSON·markdown builders, word-box grid. |
 | `Sounder/Router/WhiteboardPipeline.swift` | ~80 | Conceptual question → node/edge diagram JSON. |
 | `Sounder/Overlay/WhiteboardPanelManager.swift` | ~240 | Layered layout + sketched rendering of the diagram in a free margin. |
+| `Sounder/Grounding/AccessibilityElementReader.swift` | ~220 | AX tree walk → labelled elements, press/focus/setValue, focused-window summary. |
+| `Sounder/Camera/CameraContextPanelManager.swift` | ~240 | Webcam session, live preview card, frame grab, OCR overlay. |
 | `Sounder/Router/TranslatePipeline.swift` | ~130 | Translate intent + language filter, Claude line translation, background colour sampler. |
 | `api/proxy.ts`, `vercel.json`, `.vercelignore` (repo root) | ~20 | Root Vercel entry so GitHub-triggered deploys (from the repo root) serve the same proxy as `worker/`. |
 | `Sounder/Context/UserContextStore.swift` | ~270 | Persisted notes/links/images + `promptBundle()` for the pipelines. |
