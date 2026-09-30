@@ -80,6 +80,14 @@ Worker vars: `FIREWORKS_CHAT_MODEL`, `FIREWORKS_TRANSCRIPTION_MODEL`, `ELEVENLAB
 
 **Camera as context**: `CameraIntent` ("what am i holding", "read this page", "camera") → `CameraContextPanelManager` shows a glass card with an unmirrored `AVCaptureVideoPreviewLayer`, grabs the newest frame from an `AVCaptureVideoDataOutput`, runs accurate Vision OCR, draws the recognized lines over the preview, and `GeneralModePipeline.answerAboutCameraFrame` answers from the frame + text; the OCR text is pinned as context and the card hides after 60 s. Needs `NSCameraUsageDescription`.
 
+**Read aloud** (`ReadingIntents.swift`): "read this to me" builds a `ReadAloudScript` (lines of the circled region, else the frontmost window via the AX window frame → paragraphs by gaps/headings → `NLTokenizer` sentences that remember their lines); each sentence is spoken (`speak` then `waitForSpeechToFinish`, polling `speechOutput.isPlaying`) while its lines are highlighted with a margin bar. The session survives a hotkey interruption: "skip"/"next"/"skip this section", "explain that" (General mode on the current sentence, then resume), "go back", "continue" (re-reads the screen when the visible text was finished), "stop". Any other question ends the session. Captions are suppressed while reading.
+
+**Make readable**: `ReadableIntent` → `ReadabilityPipeline.structure` (headings, key-point lines, up to 5 definitions, spoken summary) drawn as `.marginBar` + underline on headings, yellow `.highlight` on key points, `.badge` definitions at line ends.
+
+**Rewrite in place**: circle a paragraph, say "clearer" / "shorter" / "fix this" → `ReadabilityPipeline.rewrite` returns unchanged/changed segments → `.textBlock` paints the rewritten paragraph over the block on a sampled background with changed spans marked; the text also goes to the clipboard.
+
+**Agent rehearsal**: with "Rehearse before acting" on (default), an agent task is first planned (`AgentModePipeline.plan`, 2–8 steps with element ids only for targets visible now) and acted out: a numbered route over the visible targets plus a translucent ghost buddy (`ghostCursorGlobalPoint`/`ghostStepLabel` rendered in `OverlayWindow`) that walks the steps in ~5 s with each step annotated. Then Octo waits (45 s) for the next transcript: "go"/"yes" runs `runAgentMode` with the approved plan folded into its notes; "cancel"/"no" drops it; anything else is a redirect that re-plans and rehearses again.
+
 **Glass cards**: `GlassCardBackground` (system `glassEffect` on macOS 26, `NSVisualEffectView` blur below) backs the rewind card.
 
 **Cursor Overlay**: A full-screen transparent `NSPanel` hosts the blue cursor companion. It's non-activating, joins all Spaces, and never steals focus. The cursor position, response text, waveform, and pointing animations all render in this overlay via SwiftUI through `NSHostingView`.
@@ -122,6 +130,8 @@ Worker vars: `FIREWORKS_CHAT_MODEL`, `FIREWORKS_TRANSCRIPTION_MODEL`, `ELEVENLAB
 | `Sounder/Overlay/WhiteboardPanelManager.swift` | ~240 | Layered layout + sketched rendering of the diagram in a free margin. |
 | `Sounder/Grounding/AccessibilityElementReader.swift` | ~220 | AX tree walk → labelled elements, press/focus/setValue, focused-window summary. |
 | `Sounder/Camera/CameraContextPanelManager.swift` | ~240 | Webcam session, live preview card, frame grab, OCR overlay. |
+| `Sounder/Router/ReadingIntents.swift` | ~170 | Read-aloud script builder + commands, make-readable and rewrite intents. |
+| `Sounder/Router/ReadabilityPipeline.swift` | ~110 | Structure and rewrite JSON calls. |
 | `Sounder/Router/TranslatePipeline.swift` | ~130 | Translate intent + language filter, Claude line translation, background colour sampler. |
 | `api/proxy.ts`, `vercel.json`, `.vercelignore` (repo root) | ~20 | Root Vercel entry so GitHub-triggered deploys (from the repo root) serve the same proxy as `worker/`. |
 | `Sounder/Context/UserContextStore.swift` | ~270 | Persisted notes/links/images + `promptBundle()` for the pipelines. |

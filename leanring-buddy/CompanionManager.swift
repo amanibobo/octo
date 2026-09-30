@@ -602,7 +602,7 @@ final class CompanionManager: ObservableObject {
         let askFileURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Sounder/ask.txt")
         typedQuestionTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self, let data = try? Data(contentsOf: askFileURL), let question = String(data: data, encoding: .utf8) else { return }
+                guard let self, self.currentResponseTask == nil, let data = try? Data(contentsOf: askFileURL), let question = String(data: data, encoding: .utf8) else { return }
                 do { try FileManager.default.removeItem(at: askFileURL) } catch { print("⌨️ could not remove ask.txt: \(error.localizedDescription)") }
                 var trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty, self.currentResponseTask == nil else { return }
