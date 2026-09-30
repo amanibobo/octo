@@ -288,6 +288,7 @@ nonisolated struct AnalysisResponse: Codable, Sendable {
 struct SounderInteractionReport {
     var transcript: String
     var modeUsed: String
+    var completedAt: Date = Date()
     var extractionSource: String?
     var extractionConfidence: Double?
     var tableRowCount: Int?

@@ -167,3 +167,81 @@ struct NotchPillButton: View {
         .pointerCursor()
     }
 }
+
+// MARK: - Card width (compact vs. large island)
+
+private struct NotchCardWidthKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 440
+}
+
+extension EnvironmentValues {
+    /// Width of the island's card; pages size themselves to it.
+    var notchCardWidth: CGFloat {
+        get { self[NotchCardWidthKey.self] }
+        set { self[NotchCardWidthKey.self] = newValue }
+    }
+}
+
+// MARK: - Info tip
+
+/// A small "i" that opens a short explanation while hovered.
+struct NotchInfoTip: View {
+    let text: String
+    var width: CGFloat = 230
+    @State private var isHovering = false
+
+    var body: some View {
+        Image(systemName: "info.circle")
+            .font(.system(size: 11, weight: .medium))
+            .foregroundColor(.white.opacity(isHovering ? 0.95 : 0.4))
+            .frame(width: 18, height: 18)
+            .contentShape(Rectangle())
+            .onHover { isHovering = $0 }
+            .overlay(alignment: .topLeading) {
+                if isHovering {
+                    Text(text)
+                        .font(.system(size: 11.5))
+                        .foregroundColor(.white.opacity(0.9))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(width: width, alignment: .leading)
+                        .padding(10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(Color(white: 0.12))
+                                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.white.opacity(0.12), lineWidth: 1))
+                                .shadow(color: .black.opacity(0.5), radius: 12, y: 4)
+                        )
+                        .offset(x: -6, y: 22)
+                        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .topLeading)))
+                        .zIndex(100)
+                }
+            }
+            .animation(.easeOut(duration: 0.15), value: isHovering)
+            .zIndex(isHovering ? 100 : 0)
+    }
+}
+
+/// Square icon button used in the card's header and footer.
+struct NotchIconButton: View {
+    let systemImage: String
+    var isActive: Bool = false
+    let help: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(isActive ? DS.Colors.overlayCursorBlue : .white.opacity(0.65))
+                .frame(width: 30, height: 28)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.white.opacity(isActive ? 0.12 : 0.08))
+                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Color.white.opacity(0.06), lineWidth: 1))
+                )
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+        .help(help)
+    }
+}

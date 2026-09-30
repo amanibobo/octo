@@ -65,6 +65,8 @@ final class CompanionManager: ObservableObject {
     @Published private(set) var isAnalysisServiceReachable = false
     @Published private(set) var isWorkerReachable = false
     @Published private(set) var lastInteractionReport: SounderInteractionReport?
+    /// The last few runs, newest first, for the large card's history.
+    @Published private(set) var recentInteractionReports: [SounderInteractionReport] = []
 
     /// Caption: the spoken text, revealed progressively at speaking pace so the
     /// person can read along (the model returns whole answers, not tokens).
@@ -843,7 +845,7 @@ final class CompanionManager: ObservableObject {
             // 3. Route. A dwell (hotkey held still, nothing said) always explains what
             // is under the cursor.
             if isDwellInteraction {
-                try await runGeneralMode(transcript: transcript, capture: capture, elements: elements, regionOfInterest: regionOfInterestForDwell(screenAnalysis),
+                try await runGeneralMode(transcript: transcript, capture: capture, elements: elements, textLines: textLines, regionOfInterest: regionOfInterestForDwell(screenAnalysis),
                                          report: &report, regionReason: "the user held the hotkey with the cursor resting on this spot and said nothing; explain what is under the cursor in one or two sentences.")
                 finishReport(&report, startedAt: interactionStartedAt)
                 return
@@ -962,7 +964,7 @@ final class CompanionManager: ObservableObject {
                 return
             }
 
-            try await runGeneralMode(transcript: transcript, capture: capture, elements: elements, regionOfInterest: regionOfInterest, report: &report)
+            try await runGeneralMode(transcript: transcript, capture: capture, elements: elements, textLines: textLines, regionOfInterest: regionOfInterest, report: &report)
             finishReport(&report, startedAt: interactionStartedAt)
         } catch is CancellationError {
             // User spoke again — interaction was interrupted.
@@ -1255,7 +1257,7 @@ final class CompanionManager: ObservableObject {
             let question = "explain this sentence from what i'm reading, briefly: \"\(sentence.text)\""
             let rects = sentence.lineIndices.map { script.lines[$0].boundingBoxInCapturePixels }
             let region = rects.dropFirst().reduce(rects.first ?? .zero) { $0.union($1) }
-            try await runGeneralMode(transcript: question, capture: screenAnalysis.capture, elements: screenAnalysis.elements,
+            try await runGeneralMode(transcript: question, capture: screenAnalysis.capture, elements: screenAnalysis.elements, textLines: screenAnalysis.textLines,
                                      regionOfInterest: region.isEmpty ? nil : region.insetBy(dx: -40, dy: -40), report: &report,
                                      regionReason: "the user is having this text read aloud and asked to explain the highlighted sentence")
             try Task.checkCancellation()
@@ -1925,6 +1927,7 @@ final class CompanionManager: ObservableObject {
         transcript: String,
         capture: SounderScreenCapture,
         elements: [ScreenElement],
+        textLines: [RecognizedTextLine] = [],
         regionOfInterest: CGRect?,
         report: inout SounderInteractionReport,
         regionReason: String? = nil
@@ -1935,6 +1938,7 @@ final class CompanionManager: ObservableObject {
             transcript: transcript,
             capture: capture,
             elements: elements,
+            textLines: textLines,
             regionOfInterestInCapturePixels: regionOfInterest,
             conversationHistory: conversationHistory,
             userContext: userContextForCurrentInteraction,
@@ -1948,7 +1952,7 @@ final class CompanionManager: ObservableObject {
             conversationHistory.removeFirst(conversationHistory.count - 10)
         }
 
-        var highlightPrimitives = DrawingOpsBuilder.highlightElements(answer.highlightedElements) + regionOutlinePrimitives(regionOfInterest)
+        var highlightPrimitives = DrawingOpsBuilder.highlightRects(answer.highlightRects) + regionOutlinePrimitives(regionOfInterest)
         // Sketched explanation: numbered arrows between the elements, in order.
         // A guide keeps its route alive and lights each step as the user clicks it.
         if answer.routeElements.count >= 2 {
@@ -1981,7 +1985,7 @@ final class CompanionManager: ObservableObject {
             voiceState = .idle
             detectedElementBubbleText = answer.pointLabel ?? "right here!"
             detectedElementDisplayFrame = capture.geometry.displayFrame
-            detectedElementScreenLocation = capture.geometry.globalAppKitPoint(fromCapturePixel: pointedElement.centerInCapturePixels)
+            detectedElementScreenLocation = capture.geometry.globalAppKitPoint(fromCapturePixel: answer.pointedCenterInCapturePixels ?? pointedElement.centerInCapturePixels)
             ClickyAnalytics.trackElementPointed(elementLabel: answer.pointLabel)
             print("🎯 Pointing at element \(pointedElement.id) \"\(pointedElement.text.prefix(40))\"")
         }
@@ -2030,7 +2034,10 @@ final class CompanionManager: ObservableObject {
     private func finishReport(_ report: inout SounderInteractionReport, startedAt: Date) {
         gesturePathPointsGlobal = []
         report.totalSeconds = Date().timeIntervalSince(startedAt)
+        report.completedAt = Date()
         lastInteractionReport = report
+        recentInteractionReports.insert(report, at: 0)
+        if recentInteractionReports.count > 6 { recentInteractionReports.removeLast(recentInteractionReports.count - 6) }
         print("⏱️ \(report.modeUsed) [picker: \(selectedMode.rawValue)]: capture \(String(format: "%.2f", report.captureSeconds))s, ocr \(String(format: "%.2f", report.ocrSeconds))s, plan \(String(format: "%.2f", report.planSeconds))s, analysis \(String(format: "%.2f", report.analysisSeconds))s, total \(String(format: "%.2f", report.totalSeconds))s\(report.metricText.map { " · \($0)" } ?? "")")
     }
 

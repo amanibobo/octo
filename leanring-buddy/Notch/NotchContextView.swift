@@ -18,6 +18,7 @@ struct NotchContextView: View {
     @FocusState private var isInputFocused: Bool
 
     private let horizontalPadding: CGFloat = 22
+    @Environment(\.notchCardWidth) private var cardWidth
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -62,7 +63,7 @@ struct NotchContextView: View {
             .padding(.bottom, 16)
         }
         .padding(.horizontal, horizontalPadding)
-        .frame(width: NotchIslandState.expandedWidth)
+        .frame(width: cardWidth)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(DS.Colors.overlayCursorBlue.opacity(isDropTargeted ? 0.9 : 0), lineWidth: 2)

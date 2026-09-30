@@ -2,10 +2,10 @@
 //  NotchPanelContentView.swift
 //  leanring-buddy
 //
-//  The card that unfolds from the notch. A hero row with the buddy and its
-//  state, a mode control with a live vignette of what the chosen mode does,
-//  the last run, and a footer with the hotkey and the context and settings
-//  buttons. Everything else lives in the settings and context pages.
+//  The card that unfolds from the notch. Compact: hero row, mode control with a
+//  live vignette, last run, footer. Large (the expand button): the same, wider,
+//  with a bigger vignette and a short history of recent runs. Small "i" tips
+//  explain each area on hover.
 //
 
 import SwiftUI
@@ -13,9 +13,12 @@ import SwiftUI
 struct NotchPanelContentView: View {
     @ObservedObject var companionManager: CompanionManager
     @ObservedObject var userContextStore: UserContextStore
+    let isLarge: Bool
     let onOpenSettings: () -> Void
     let onOpenContext: () -> Void
+    let onToggleLarge: () -> Void
 
+    @Environment(\.notchCardWidth) private var cardWidth
     private let horizontalPadding: CGFloat = 26
 
     var body: some View {
@@ -24,9 +27,11 @@ struct NotchPanelContentView: View {
                 .padding(.horizontal, horizontalPadding)
                 .padding(.top, 16)
                 .padding(.bottom, 18)
+                .zIndex(3)
 
             modeControl
                 .padding(.horizontal, horizontalPadding)
+                .zIndex(2)
 
             modeShowcase
                 .padding(.horizontal, horizontalPadding)
@@ -35,9 +40,15 @@ struct NotchPanelContentView: View {
             hairline
                 .padding(.top, 18)
 
-            lastRun
-                .padding(.horizontal, horizontalPadding)
-                .padding(.vertical, 14)
+            if isLarge {
+                recentRuns
+                    .padding(.horizontal, horizontalPadding)
+                    .padding(.vertical, 14)
+            } else {
+                lastRun
+                    .padding(.horizontal, horizontalPadding)
+                    .padding(.vertical, 14)
+            }
 
             hairline
 
@@ -45,7 +56,7 @@ struct NotchPanelContentView: View {
                 .padding(.horizontal, horizontalPadding - 6)
                 .padding(.vertical, 12)
         }
-        .frame(width: NotchIslandState.expandedWidth)
+        .frame(width: cardWidth)
     }
 
     // MARK: - Hero
@@ -62,24 +73,32 @@ struct NotchPanelContentView: View {
             }
             .frame(width: 46, height: 46)
             VStack(alignment: .leading, spacing: 3) {
-                Text("Octo")
-                    .font(.system(size: 17, weight: .semibold, design: .rounded))
-                    .foregroundColor(.white)
+                HStack(spacing: 6) {
+                    Text("Octo")
+                        .font(.system(size: 17, weight: .semibold, design: .rounded))
+                        .foregroundColor(.white)
+                    NotchInfoTip(text: "Octo reads whatever is on your screen and answers out loud. Hold the hotkey, ask, let go. Circle something with the cursor while holding to ask about just that. Rest the cursor on something for a second to have it explained without speaking.")
+                }
                 Text(statusLine)
                     .font(.system(size: 12))
                     .foregroundColor(.white.opacity(0.5))
                     .lineLimit(1)
             }
             Spacer()
-            HStack(spacing: 7) {
-                serviceDot(isHealthy: companionManager.isWorkerReachable, label: "Claude")
-                serviceDot(isHealthy: companionManager.isAnalysisServiceReachable, label: "Clinical rules")
-                serviceDot(isHealthy: true, label: "Voice · \(companionManager.buddyDictationManager.transcriptionProviderDisplayName)")
+            HStack(spacing: 6) {
+                HStack(spacing: 7) {
+                    serviceDot(isHealthy: companionManager.isWorkerReachable, label: "Claude")
+                    serviceDot(isHealthy: companionManager.isAnalysisServiceReachable, label: "Clinical rules")
+                    serviceDot(isHealthy: true, label: "Voice · \(companionManager.buddyDictationManager.transcriptionProviderDisplayName)")
+                    NotchInfoTip(text: "Service status, left to right: the language model proxy, the clinical rules service, and voice. Green is connected. Details and the model in use are under Settings › Services.", width: 210)
+                }
+                .padding(.leading, 9)
+                .padding(.trailing, 4)
+                .padding(.vertical, 5)
+                .background(Capsule().fill(Color.white.opacity(0.06)))
+                NotchIconButton(systemImage: isLarge ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                                isActive: isLarge, help: isLarge ? "Compact card" : "Larger card", action: onToggleLarge)
             }
-            .padding(.horizontal, 9)
-            .padding(.vertical, 6)
-            .background(Capsule().fill(Color.white.opacity(0.06)))
-            .help("Services")
         }
     }
 
@@ -109,62 +128,83 @@ struct NotchPanelContentView: View {
     // MARK: - Modes
 
     private var modeControl: some View {
-        HStack(spacing: 2) {
-            ForEach(SounderMode.allCases) { mode in
-                let isSelected = companionManager.selectedMode == mode
-                Button(action: {
-                    withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
-                        companionManager.setSelectedMode(mode)
-                    }
-                }) {
-                    Text(mode.displayName)
-                        .font(.system(size: 12.5, weight: isSelected ? .semibold : .medium))
-                        .foregroundColor(isSelected ? .black : .white.opacity(0.7))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 7)
-                        .background(
-                            ZStack {
-                                if isSelected {
-                                    Capsule()
-                                        .fill(LinearGradient(colors: [DS.Colors.green400, DS.Colors.green500], startPoint: .top, endPoint: .bottom))
-                                        .shadow(color: DS.Colors.overlayCursorBlue.opacity(0.45), radius: 8, y: 2)
+        HStack(spacing: 8) {
+            HStack(spacing: 2) {
+                ForEach(SounderMode.allCases) { mode in
+                    let isSelected = companionManager.selectedMode == mode
+                    Button(action: {
+                        withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+                            companionManager.setSelectedMode(mode)
+                        }
+                    }) {
+                        Text(mode.displayName)
+                            .font(.system(size: 12.5, weight: isSelected ? .semibold : .medium))
+                            .foregroundColor(isSelected ? .black : .white.opacity(0.7))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 7)
+                            .background(
+                                ZStack {
+                                    if isSelected {
+                                        Capsule()
+                                            .fill(LinearGradient(colors: [DS.Colors.green400, DS.Colors.green500], startPoint: .top, endPoint: .bottom))
+                                            .shadow(color: DS.Colors.overlayCursorBlue.opacity(0.45), radius: 8, y: 2)
+                                    }
                                 }
-                            }
-                        )
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .pointerCursor()
+                    .help(mode.explanation)
                 }
-                .buttonStyle(.plain)
-                .pointerCursor()
-                .help(mode.explanation)
             }
+            .padding(3)
+            .background(
+                Capsule()
+                    .fill(Color.white.opacity(0.07))
+                    .overlay(Capsule().stroke(Color.white.opacity(0.06), lineWidth: 1))
+            )
+            NotchInfoTip(text: "Modes. Auto picks per question. General answers anything on screen and points. Rx reads a chart, checks interactions and dosing, and pulls evidence; only concept IDs leave the Mac. Agent does the task on this Mac, step by step.", width: 250)
         }
-        .padding(3)
-        .background(
-            Capsule()
-                .fill(Color.white.opacity(0.07))
-                .overlay(Capsule().stroke(Color.white.opacity(0.06), lineWidth: 1))
-        )
     }
 
     /// Vignette of the selected mode in action next to what it does.
     private var modeShowcase: some View {
         HStack(alignment: .top, spacing: 14) {
             NotchModeVignetteView(mode: companionManager.selectedMode)
+                .scaleEffect(isLarge ? 1.35 : 1, anchor: .topLeading)
+                .frame(width: isLarge ? 200 : 148, height: isLarge ? 124 : 92, alignment: .topLeading)
                 .id(companionManager.selectedMode)
                 .transition(.opacity)
             VStack(alignment: .leading, spacing: 5) {
                 Text(companionManager.selectedMode.explanation)
-                    .font(.system(size: 12.5))
+                    .font(.system(size: isLarge ? 13 : 12.5))
                     .foregroundColor(.white.opacity(0.78))
                     .fixedSize(horizontal: false, vertical: true)
                 Text("Try: \u{201C}\(companionManager.selectedMode.exampleQuestion)\u{201D}")
                     .font(.system(size: 11.5))
                     .foregroundColor(DS.Colors.overlayCursorBlue.opacity(0.85))
                     .fixedSize(horizontal: false, vertical: true)
+                if isLarge {
+                    Text(Self.extras(for: companionManager.selectedMode))
+                        .font(.system(size: 11.5))
+                        .foregroundColor(.white.opacity(0.45))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 2)
+                }
             }
             .id(companionManager.selectedMode)
             .transition(.opacity.combined(with: .move(edge: .trailing)))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private static func extras(for mode: SounderMode) -> String {
+        switch mode {
+        case .automatic: return "Also anywhere: \u{201C}translate this\u{201D}, \u{201C}read this to me\u{201D}, \u{201C}what did that error say five minutes ago?\u{201D}, circle a table and \u{201C}copy as csv\u{201D}."
+        case .general: return "Circle text and say \u{201C}clearer\u{201D} to rewrite it, \u{201C}make this readable\u{201D} for structure, or ask how something works for a sketch."
+        case .clinical: return "Circle two drugs and ask about them together. \u{201C}What's new for atrial fibrillation?\u{201D} pulls a paper card."
+        case .agent: return "Say \u{201C}rehearse\u{201D} first to watch a ghost run through the plan before anything happens."
+        }
     }
 
     private var hairline: some View {
@@ -173,47 +213,79 @@ struct NotchPanelContentView: View {
             .frame(height: 1)
     }
 
-    // MARK: - Last run
+    // MARK: - Runs
 
     @ViewBuilder
     private var lastRun: some View {
         if let report = companionManager.lastInteractionReport {
-            VStack(alignment: .leading, spacing: 5) {
-                Text("\u{201C}\(report.transcript)\u{201D}")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(.white.opacity(0.88))
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 8) {
-                    Text(report.modeUsed)
-                        .font(.system(size: 10.5, weight: .semibold, design: .rounded))
-                        .foregroundColor(DS.Colors.overlayCursorBlue)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(DS.Colors.overlayCursorBlue.opacity(0.14)))
-                    Text(String(format: "%.1fs", report.totalSeconds))
-                    if let metric = report.metricText {
-                        Text("·").opacity(0.4)
-                        Text(metric).lineLimit(1)
-                    }
+            runRow(report, isFirst: true)
+        } else {
+            emptyRuns
+        }
+    }
+
+    @ViewBuilder
+    private var recentRuns: some View {
+        if companionManager.recentInteractionReports.isEmpty {
+            emptyRuns
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 6) {
+                    Text("RECENT")
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .foregroundColor(.white.opacity(0.45))
+                        .tracking(0.8)
+                    NotchInfoTip(text: "Your last few questions, which mode handled each, and how long it took. Timings are capture, reading the screen, and the model.", width: 210)
                 }
-                .font(.system(size: 12))
-                .foregroundColor(.white.opacity(0.45))
-                if let error = report.errorMessage {
-                    Text(error)
-                        .font(.system(size: 11))
-                        .foregroundColor(Color(red: 0.95, green: 0.45, blue: 0.4))
-                        .lineLimit(2)
+                ForEach(Array(companionManager.recentInteractionReports.prefix(4).enumerated()), id: \.offset) { index, report in
+                    runRow(report, isFirst: index == 0)
                 }
             }
-        } else {
+        }
+    }
+
+    private var emptyRuns: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "waveform")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(DS.Colors.overlayCursorBlue.opacity(0.8))
+            Text("Nothing yet. Hold the hotkey and ask \u{201C}what's on my screen?\u{201D}")
+                .font(.system(size: 12))
+                .foregroundColor(.white.opacity(0.45))
+        }
+    }
+
+    private func runRow(_ report: SounderInteractionReport, isFirst: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("\u{201C}\(report.transcript)\u{201D}")
+                .font(.system(size: isFirst ? 13 : 12, weight: .medium))
+                .foregroundColor(.white.opacity(isFirst ? 0.88 : 0.7))
+                .lineLimit(isLarge ? 1 : 2)
+                .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
-                Image(systemName: "waveform")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(DS.Colors.overlayCursorBlue.opacity(0.8))
-                Text("Nothing yet. Hold the hotkey and ask \u{201C}what's on my screen?\u{201D}")
-                    .font(.system(size: 12))
-                    .foregroundColor(.white.opacity(0.45))
+                Text(report.modeUsed)
+                    .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                    .foregroundColor(DS.Colors.overlayCursorBlue)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(DS.Colors.overlayCursorBlue.opacity(0.14)))
+                Text(String(format: "%.1fs", report.totalSeconds))
+                if let metric = report.metricText {
+                    Text("·").opacity(0.4)
+                    Text(metric).lineLimit(1)
+                }
+                if isLarge {
+                    Spacer()
+                    Text(report.completedAt, style: .time)
+                }
+            }
+            .font(.system(size: 11.5))
+            .foregroundColor(.white.opacity(0.45))
+            if let error = report.errorMessage {
+                Text(error)
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(red: 0.95, green: 0.45, blue: 0.4))
+                    .lineLimit(2)
             }
         }
     }
@@ -235,11 +307,12 @@ struct NotchPanelContentView: View {
                                 .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).stroke(Color.white.opacity(0.08), lineWidth: 1))
                         )
                 }
-                Text("hold to talk · circle to focus · rest to ask")
+                Text(isLarge ? "hold to talk · circle to focus · rest to ask" : "hold to talk")
                     .font(.system(size: 11))
                     .foregroundColor(.white.opacity(0.4))
                     .padding(.leading, 4)
                     .lineLimit(1)
+                NotchInfoTip(text: "Hold the keys and speak; release to send. While holding: draw a circle to scope the question to that area, or hold still over something for a second to have it explained. Change the keys under Settings › Hotkey.", width: 230)
             }
             .padding(.leading, 6)
             Spacer()
@@ -255,27 +328,16 @@ struct NotchPanelContentView: View {
                 .foregroundColor(userContextStore.items.isEmpty ? .white.opacity(0.65) : DS.Colors.overlayCursorBlue)
                 .frame(height: 28)
                 .padding(.horizontal, userContextStore.items.isEmpty ? 9 : 10)
-                .background(footerButtonBackground)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.white.opacity(0.08))
+                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Color.white.opacity(0.06), lineWidth: 1))
+                )
             }
             .buttonStyle(.plain)
             .pointerCursor()
             .help("Context · notes, links and images Octo keeps in mind")
-            Button(action: onOpenSettings) {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.white.opacity(0.65))
-                    .frame(width: 30, height: 28)
-                    .background(footerButtonBackground)
-            }
-            .buttonStyle(.plain)
-            .pointerCursor()
-            .help("Settings · hotkey, voice, memory, buddy")
+            NotchIconButton(systemImage: "gearshape", help: "Settings", action: onOpenSettings)
         }
-    }
-
-    private var footerButtonBackground: some View {
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .fill(Color.white.opacity(0.08))
-            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Color.white.opacity(0.06), lineWidth: 1))
     }
 }

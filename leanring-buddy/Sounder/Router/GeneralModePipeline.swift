@@ -18,6 +18,10 @@ final class GeneralModePipeline {
         let pointedElement: ScreenElement?
         let pointLabel: String?
         let highlightedElements: [ScreenElement]
+        /// Exact boxes to light up: word runs when the model quoted part of a line, else the line.
+        let highlightRects: [CGRect]
+        /// Where to fly when pointing: the quoted words' centre, else the element centre.
+        let pointedCenterInCapturePixels: CGPoint?
         /// A web search query when the user asked to see a paper, image, video or link.
         let mediaQuery: String?
         let mediaKind: MediaCard.Kind?
@@ -69,6 +73,8 @@ final class GeneralModePipeline {
 
     the first image is the screen. any further images are references the user pinned as context, not the screen; never point at things in them.
 
+    grounding rules, strictly: highlight only the exact thing the user asked about, and nothing next to it "for context". each highlight names an element id and quotes, verbatim from the element list, the words to light up: quote just the phrase when the user asked about a word or phrase (the app lights only those words), quote the whole element text only when the whole line is the answer. a highlight whose quote is not in that element's text is discarded, so never guess. when the user circled a region, only elements inside it exist: answer about those and never highlight or point outside. if nothing on screen matches what was asked, say so and highlight nothing rather than the nearest thing. point_element_id and point_quote follow the same rule.
+
     the screenshot has numbered red tags. each tag is an element id from the list you are given. point (point_element_id + a 1-3 word point_label) only when the user is asking where something is, how to do something, or what to click, and the thing is on screen. for descriptive questions ("what do you see", "what is this") return null and do not point. you may also return a few highlight_element_ids to light up related text. only use ids from the list.
 
     routes: if the user asks how something flows, moves or connects on this screen, or what order things happen in ("how does the data flow here?", "walk me through this"), you must put the element ids in order in route_element_ids (2 to 8, pick the labelled boxes, headings or buttons that make the best stops even if the ids are small text), a 1-4 word label per hop in route_labels, and route_kind "flow"; narrate the hops in order in speak. never answer a walkthrough question with an empty route while there are elements on screen. if they ask how to do a multi-step thing on this screen themselves ("show me how to…", "where do i click to…", "what are the steps to…"), do the same with route_kind "guide": the ids are the things they will click in order, labels say what each click does, and speak tells them to follow the numbers. otherwise leave route_element_ids empty and route_kind null.
@@ -83,8 +89,9 @@ final class GeneralModePipeline {
         "properties": [
             "speak": ["type": "string"],
             "point_element_id": ["type": ["integer", "null"]],
+            "point_quote": ["type": ["string", "null"]],
             "point_label": ["type": ["string", "null"]],
-            "highlight_element_ids": ["type": "array", "items": ["type": "integer"]],
+            "highlights": ["type": "array", "items": ["type": "object", "properties": ["element_id": ["type": "integer"], "quote": ["type": "string"]], "required": ["element_id", "quote"]]],
             "media_query": ["type": ["string", "null"]],
             "media_kind": ["type": ["string", "null"], "enum": ["paper", "image", "video", "link", NSNull()]],
             "route_element_ids": ["type": "array", "items": ["type": "integer"]],
@@ -92,13 +99,49 @@ final class GeneralModePipeline {
             "route_kind": ["type": ["string", "null"], "enum": ["flow", "guide", NSNull()]],
             "sketch_diagram": ["type": "boolean"]
         ],
-        "required": ["speak", "point_element_id", "point_label", "highlight_element_ids", "media_query", "media_kind", "route_element_ids", "route_labels", "route_kind", "sketch_diagram"]
+        "required": ["speak", "point_element_id", "point_quote", "point_label", "highlights", "media_query", "media_kind", "route_element_ids", "route_labels", "route_kind", "sketch_diagram"]
     ]
+
+    /// The box for a quoted phrase inside an element: the shortest run of that
+    /// line's OCR words whose text contains the quote, else the whole element when
+    /// the quote is the whole text (or the element has no word boxes). Nil when the
+    /// quote is not in the element at all.
+    static func groundedRect(for quote: String, in element: ScreenElement, textLines: [RecognizedTextLine]) -> CGRect? {
+        func normalize(_ text: String) -> String {
+            text.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }.joined(separator: " ")
+        }
+        let normalizedQuote = normalize(quote)
+        let normalizedText = normalize(element.text)
+        if normalizedQuote.isEmpty { return element.boundingBoxInCapturePixels } // no quote: whole element, as before
+        guard normalizedText.contains(normalizedQuote) else { return nil }
+        if normalizedQuote == normalizedText { return element.boundingBoxInCapturePixels }
+        // OCR elements are lines in order; find the line and its words.
+        guard element.kind == "text", element.id >= 1, element.id <= textLines.count else { return element.boundingBoxInCapturePixels }
+        let line = textLines[element.id - 1]
+        let words = line.words.filter { !$0.text.isEmpty }
+        guard words.count >= 2 else { return element.boundingBoxInCapturePixels }
+        let normalizedWords = words.map { normalize($0.text) }
+        var best: (start: Int, end: Int)?
+        for start in 0..<words.count {
+            var joined = ""
+            for end in start..<words.count {
+                joined = joined.isEmpty ? normalizedWords[end] : joined + " " + normalizedWords[end]
+                if joined.contains(normalizedQuote) {
+                    if best == nil || (end - start) < (best!.end - best!.start) { best = (start, end) }
+                    break
+                }
+                if joined.count > normalizedQuote.count + 24 { break }
+            }
+        }
+        guard let best else { return element.boundingBoxInCapturePixels }
+        return words[best.start...best.end].dropFirst().reduce(words[best.start].boundingBoxInCapturePixels) { $0.union($1.boundingBoxInCapturePixels) }
+    }
 
     func answer(
         transcript: String,
         capture: SounderScreenCapture,
         elements: [ScreenElement],
+        textLines: [RecognizedTextLine] = [],
         regionOfInterestInCapturePixels: CGRect? = nil,
         conversationHistory: [ChatModelPriorTurn],
         userContext: UserContextBundle? = nil,
@@ -115,8 +158,16 @@ final class GeneralModePipeline {
             let paddedRegion = region.insetBy(dx: -region.width * 0.12, dy: -region.height * 0.12).intersection(fullBounds).integral
             if paddedRegion.width >= 40, paddedRegion.height >= 40, let cropped = capture.cgImage.cropping(to: paddedRegion) {
                 groundingImage = cropped
+                // Only what the user actually circled: an element counts when most of
+                // it lies inside the circle, so a neighbouring line that merely touches
+                // the edge is not offered to the model at all.
+                let strictRegion = region.insetBy(dx: -6, dy: -6)
                 groundingElements = elements
-                    .filter { $0.boundingBoxInCapturePixels.intersects(paddedRegion) }
+                    .filter { element in
+                        let box = element.boundingBoxInCapturePixels
+                        let overlap = box.intersection(strictRegion)
+                        return !overlap.isNull && overlap.width * overlap.height >= 0.6 * box.width * box.height
+                    }
                     .prefix(Self.maximumElementsSentToModel)
                     .map { element in
                         ScreenElement(id: element.id, kind: element.kind, text: element.text,
@@ -162,13 +213,42 @@ final class GeneralModePipeline {
         )
 
         let spokenText = (responseObject["speak"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let pointedElementID = responseObject["point_element_id"] as? Int
         let pointLabel = responseObject["point_label"] as? String
-        let highlightIDs = Set((responseObject["highlight_element_ids"] as? [Int]) ?? [])
+        // Only elements that were offered to the model can be lit: this is what
+        // keeps a circled question from spilling onto neighbours.
+        let elementsByID = Dictionary(uniqueKeysWithValues: groundingElements.map { ($0.id, $0) })
 
-        let elementsByID = Dictionary(uniqueKeysWithValues: elements.map { ($0.id, $0) })
-        let pointedElement = pointedElementID.flatMap { elementsByID[$0] }
-        let highlightedElements = highlightIDs.compactMap { elementsByID[$0] }.filter { $0.id != pointedElementID }
+        // Every highlight must quote text that is really in that element, and the
+        // quote picks the exact words to light up.
+        var highlightedElements: [ScreenElement] = []
+        var highlightRects: [CGRect] = []
+        var seenHighlightIDs = Set<Int>()
+        for entry in (responseObject["highlights"] as? [[String: Any]]) ?? [] {
+            guard let id = entry["element_id"] as? Int, let element = elementsByID[id], seenHighlightIDs.insert(id).inserted else { continue }
+            let quote = (entry["quote"] as? String) ?? ""
+            guard let rect = Self.groundedRect(for: quote, in: element, textLines: textLines) else {
+                print("🎯 dropped highlight [\(id)]: quote \"\(quote.prefix(40))\" not in \"\(element.text.prefix(40))\"")
+                continue
+            }
+            highlightedElements.append(element)
+            highlightRects.append(rect)
+        }
+
+        var pointedElement: ScreenElement?
+        var pointedCenter: CGPoint?
+        if let pointedElementID = responseObject["point_element_id"] as? Int, let element = elementsByID[pointedElementID] {
+            let quote = (responseObject["point_quote"] as? String) ?? ""
+            if let rect = Self.groundedRect(for: quote, in: element, textLines: textLines) {
+                pointedElement = element
+                pointedCenter = CGPoint(x: rect.midX, y: rect.midY)
+            } else {
+                print("🎯 dropped point [\(pointedElementID)]: quote \"\(quote.prefix(40))\" not in \"\(element.text.prefix(40))\"")
+            }
+        }
+        if let pointedElement, let index = highlightedElements.firstIndex(where: { $0.id == pointedElement.id }) {
+            highlightedElements.remove(at: index)
+            highlightRects.remove(at: index)
+        }
 
         let mediaQuery = (responseObject["media_query"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let mediaKind = (responseObject["media_kind"] as? String).flatMap { MediaCard.Kind(rawValue: $0) }
@@ -185,6 +265,8 @@ final class GeneralModePipeline {
             pointedElement: pointedElement,
             pointLabel: pointLabel,
             highlightedElements: Array(highlightedElements.prefix(6)),
+            highlightRects: Array(highlightRects.prefix(6)),
+            pointedCenterInCapturePixels: pointedCenter,
             mediaQuery: (mediaQuery?.isEmpty ?? true) ? nil : mediaQuery,
             mediaKind: mediaKind,
             routeElements: Array(routeElements.prefix(8)),

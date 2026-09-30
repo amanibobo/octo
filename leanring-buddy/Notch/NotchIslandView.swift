@@ -59,6 +59,11 @@ final class NotchIslandState: ObservableObject {
     @Published var isPressed = false
     @Published var isShowingSettings = false
     @Published var isShowingContext = false
+    /// Large mode: a wider card with more room (history, bigger vignette). Persisted.
+    @Published var isLarge: Bool = UserDefaults.standard.bool(forKey: "octoNotchLarge") {
+        didSet { UserDefaults.standard.set(isLarge, forKey: "octoNotchLarge") }
+    }
+    var expandedWidth: CGFloat { isLarge ? NotchIslandState.largeWidth : NotchIslandState.compactWidth }
 
     /// Physical notch metrics, set once from the screen.
     var notchWidth: CGFloat = 200
@@ -68,7 +73,8 @@ final class NotchIslandState: ObservableObject {
     /// Not published: it changes every animation frame and nothing renders from it.
     var measuredIslandSize: CGSize = .zero
 
-    static let expandedWidth: CGFloat = 440
+    static let compactWidth: CGFloat = 440
+    static let largeWidth: CGFloat = 660
     /// Critically damped springs: no overshoot, so the card never bounces past its edges.
     static let expandAnimation: Animation = .spring(response: 0.42, dampingFraction: 0.88)
     static let collapseAnimation: Animation = .spring(response: 0.34, dampingFraction: 0.92)
@@ -117,7 +123,7 @@ struct NotchIslandView: View {
                 .opacity(state.isCollapsedFaceVisible ? 1 : 0)
                 .allowsHitTesting(false)
         }
-        .frame(width: state.isExpanded ? NotchIslandState.expandedWidth : state.collapsedSize.width,
+        .frame(width: state.isExpanded ? state.expandedWidth : state.collapsedSize.width,
                height: state.isExpanded ? measuredCardContentHeight : state.collapsedSize.height,
                alignment: .top)
         .clipShape(shape)
@@ -148,17 +154,21 @@ struct NotchIslandView: View {
                     withAnimation(NotchIslandState.expandAnimation) { state.isShowingContext = false }
                 })
             } else if companionManager.hasCompletedOnboarding && companionManager.allPermissionsGranted {
-                NotchPanelContentView(companionManager: companionManager, userContextStore: companionManager.userContextStore, onOpenSettings: {
+                NotchPanelContentView(companionManager: companionManager, userContextStore: companionManager.userContextStore, isLarge: state.isLarge, onOpenSettings: {
                     withAnimation(NotchIslandState.expandAnimation) { state.isShowingSettings = true }
                 }, onOpenContext: {
                     withAnimation(NotchIslandState.expandAnimation) { state.isShowingContext = true }
+                }, onToggleLarge: {
+                    withAnimation(NotchIslandState.expandAnimation) { state.isLarge.toggle() }
                 })
             } else {
                 CompanionPanelView(companionManager: companionManager, isEmbeddedInNotch: true)
             }
         }
         .padding(.top, state.notchHeight)
-        .frame(width: NotchIslandState.expandedWidth)
+        .frame(width: state.expandedWidth)
+        .environment(\.notchCardWidth, state.expandedWidth)
+        .animation(NotchIslandState.expandAnimation, value: state.isLarge)
         .fixedSize(horizontal: false, vertical: true)
         .background(
             GeometryReader { cardGeometry in

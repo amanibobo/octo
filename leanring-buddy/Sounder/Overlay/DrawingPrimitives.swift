@@ -160,6 +160,13 @@ enum DrawingOpsBuilder {
         }
     }
 
+    /// Exact boxes (word runs or lines) lit in the buddy's colour.
+    static func highlightRects(_ rects: [CGRect]) -> [DrawingPrimitive] {
+        rects.enumerated().map { index, rect in
+            .highlight(id: "grounded-\(index)", rectInCapturePixels: rect.insetBy(dx: -4, dy: -3), color: .blue)
+        }
+    }
+
     static func highlightElements(_ elements: [ScreenElement]) -> [DrawingPrimitive] {
         elements.map { element in
             .highlight(id: "element-\(element.id)", rectInCapturePixels: element.boundingBoxInCapturePixels.insetBy(dx: -4, dy: -3), color: .blue)

@@ -191,7 +191,7 @@ final class NotchPanelManager {
         var islandSize = islandState.measuredIslandSize
         if islandSize.width < 1 || islandSize.height < 1 {
             islandSize = islandState.isExpanded
-                ? CGSize(width: NotchIslandState.expandedWidth, height: 320)
+                ? CGSize(width: islandState.expandedWidth, height: 320)
                 : islandState.collapsedSize
         }
         return CGRect(

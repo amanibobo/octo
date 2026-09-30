@@ -88,6 +88,10 @@ Worker vars: `FIREWORKS_CHAT_MODEL`, `FIREWORKS_TRANSCRIPTION_MODEL`, `ELEVENLAB
 
 **Agent rehearsal**: with "Rehearse before acting" on (off by default; or per task with "rehearse …" / "… show me the plan first"), an agent task is first planned (`AgentModePipeline.plan`, 2–8 steps with element ids only for targets visible now) and acted out: a numbered route over the visible targets plus a translucent ghost buddy (`ghostCursorGlobalPoint`/`ghostStepLabel` rendered in `OverlayWindow`) that walks the steps in ~5 s with each step annotated. Then Octo waits (45 s) for the next transcript: "go"/"yes" runs `runAgentMode` with the approved plan folded into its notes; "cancel"/"no" drops it; anything else is a redirect that re-plans and rehearses again.
 
+**Card sizes and tips**: `NotchIslandState.isLarge` (persisted `octoNotchLarge`) switches the card between 440 and 660 pt; pages read the width from the `notchCardWidth` environment value. Large mode shows a bigger vignette, extra per-mode hints and the last four runs (`recentInteractionReports`). `NotchInfoTip` is the hover "i" explanation used across the card and settings. Settings is a vertical-tab layout (`NotchSettingsView.Section`: Hotkey, Voice, Memory, Buddy, Services, About).
+
+**Precise grounding (General mode)**: the model returns `highlights: [{element_id, quote}]` and `point_quote`; `GeneralModePipeline.groundedRect` accepts a highlight only if the quote is really in that element's text and shrinks it to the shortest run of OCR words containing the quote, so a word gets lit, not its line. A circled region only offers elements at least 60 % inside it, and highlights/points outside the offered set are impossible. Dropped highlights are logged with 🎯.
+
 **Glass cards**: `GlassCardBackground` (system `glassEffect` on macOS 26, `NSVisualEffectView` blur below) backs the rewind card.
 
 **Cursor Overlay**: A full-screen transparent `NSPanel` hosts the blue cursor companion. It's non-activating, joins all Spaces, and never steals focus. The cursor position, response text, waveform, and pointing animations all render in this overlay via SwiftUI through `NSHostingView`.
