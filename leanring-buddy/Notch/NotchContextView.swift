@@ -10,6 +10,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct NotchContextView: View {
+    @ObservedObject private var octoAppearance = OctoAppearance.shared
     @ObservedObject var userContextStore: UserContextStore
     let onBack: () -> Void
 

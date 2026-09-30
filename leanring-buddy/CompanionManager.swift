@@ -26,6 +26,12 @@ enum CompanionVoiceState {
 @MainActor
 final class CompanionManager: ObservableObject {
     @Published private(set) var voiceState: CompanionVoiceState = .idle
+    /// True while the Agent (or its rehearsal) is driving the screen. The notch
+    /// shows "Acting" on its wings for as long as this is set.
+    @Published private(set) var isActing = false
+    /// True while a voice is actually playing. Kept by a small poll of the speech
+    /// clients, because the voice state flips to idle whenever the buddy points.
+    @Published private(set) var isSpeaking = false
     @Published private(set) var lastTranscript: String?
     @Published private(set) var currentAudioPowerLevel: CGFloat = 0
     @Published private(set) var hasAccessibilityPermission = false
@@ -280,7 +286,8 @@ final class CompanionManager: ObservableObject {
             ? AppleSpeechTranscriptionProvider()
             : BuddyTranscriptionProviderFactory.makeDefaultProvider()
         self.buddyDictationManager = BuddyDictationManager(transcriptionProvider: transcriptionProvider)
-    }
+            startSpeakingPoll()
+}
 
     /// True when all four required permissions are granted.
     var allPermissionsGranted: Bool {
@@ -1180,6 +1187,17 @@ final class CompanionManager: ObservableObject {
     }
 
     /// Speech clients return once playback has begun; reading aloud needs the end.
+    /// Mirrors the speech clients' playback into `isSpeaking` for the notch.
+    private func startSpeakingPoll() {
+        Task { [weak self] in
+            while let self, !Task.isCancelled {
+                let playing = self.speechOutput.isPlaying || self.fallbackSpeechOutput.isPlaying
+                if playing != self.isSpeaking { self.isSpeaking = playing }
+                try? await Task.sleep(nanoseconds: 150_000_000)
+            }
+        }
+    }
+
     private func waitForSpeechToFinish(maximumSeconds: TimeInterval = 90) async {
         let deadline = Date().addingTimeInterval(maximumSeconds)
         // Give the queue a beat to start before checking.
@@ -1676,6 +1694,8 @@ final class CompanionManager: ObservableObject {
     private func rehearseAgentTask(task: String, redirect: String?, previousNotes: ResearchNotes?, screenAnalysis: ScreenAnalysis, report: inout SounderInteractionReport) async throws {
         report.modeUsed = "Rehearsal"
         report.analysisTask = "rehearse"
+        isActing = true
+        defer { isActing = false }
         var researchNotes = previousNotes
         if researchNotes == nil, ResearchAgent.needsResearch(for: task) {
             presentCaption("researching how to do that…")
@@ -1791,6 +1811,8 @@ final class CompanionManager: ObservableObject {
         }
         try Task.checkCancellation()
 
+        isActing = true
+        defer { isActing = false }
         var screenAnalysis = firstScreenAnalysis
         var history: [String] = []
         var completionSummary = "i ran out of steps before finishing that."

@@ -91,11 +91,27 @@ enum JSONSchemaTools {
     /// Returns a copy with `enum: values` set on the schema at `path` (property
     /// names, with "items" for array elements). Used to allow only the element ids
     /// that exist on this turn, so an unlisted id cannot be emitted at all.
+    /// Sets `enum` on a leaf. Strict mode rejects `enum` next to a `["x", "null"]`
+    /// type, so a nullable leaf becomes `anyOf: [{type: x, enum: [...]}, {type: null}]`.
+    static func nullableEnum(_ schema: [String: Any], values: [Any]) -> [String: Any] {
+        var leaf = schema
+        let concreteValues = values.filter { !($0 is NSNull) }
+        let types = (schema["type"] as? [String]) ?? (schema["type"] as? String).map { [$0] } ?? []
+        if types.contains("null") {
+            let concreteTypes = types.filter { $0 != "null" }
+            let concreteType: Any = concreteTypes.count == 1 ? concreteTypes[0] : concreteTypes
+            leaf["type"] = nil
+            leaf["enum"] = nil
+            leaf["anyOf"] = [["type": concreteType, "enum": concreteValues] as [String: Any], ["type": "null"] as [String: Any]]
+        } else {
+            leaf["enum"] = concreteValues
+        }
+        return leaf
+    }
+
     static func settingEnum(_ schema: [String: Any], atPath path: [String], values: [Any]) -> [String: Any] {
         guard let first = path.first else {
-            var leaf = schema
-            leaf["enum"] = values
-            return leaf
+            return nullableEnum(schema, values: values)
         }
         var result = schema
         if first == "items", let items = schema["items"] as? [String: Any] {

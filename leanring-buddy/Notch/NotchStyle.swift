@@ -56,6 +56,7 @@ struct NotchPageHeader<Trailing: View>: View {
 
 /// A titled group with a subtle card background.
 struct NotchSectionCard<Content: View>: View {
+    @ObservedObject private var octoAppearance = OctoAppearance.shared
     let title: String
     let systemImage: String
     @ViewBuilder let content: () -> Content
@@ -84,6 +85,7 @@ struct NotchSectionCard<Content: View>: View {
 }
 
 struct NotchToggleRow: View {
+    @ObservedObject private var octoAppearance = OctoAppearance.shared
     let title: String
     let detail: String
     let isOn: Bool
@@ -112,6 +114,7 @@ struct NotchToggleRow: View {
 }
 
 struct NotchInfoRow: View {
+    @ObservedObject private var octoAppearance = OctoAppearance.shared
     let title: String
     let value: String
     var isBad: Bool = false
@@ -139,6 +142,7 @@ struct NotchInfoRow: View {
 
 /// Small capsule button; `isProminent` fills it green.
 struct NotchPillButton: View {
+    @ObservedObject private var octoAppearance = OctoAppearance.shared
     let title: String
     var systemImage: String? = nil
     var isProminent: Bool = false
@@ -223,6 +227,7 @@ struct NotchInfoTip: View {
 
 /// Square icon button used in the card's header and footer.
 struct NotchIconButton: View {
+    @ObservedObject private var octoAppearance = OctoAppearance.shared
     let systemImage: String
     var isActive: Bool = false
     let help: String

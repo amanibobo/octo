@@ -157,6 +157,7 @@ struct VisualEffectBlur: NSViewRepresentable {
 // MARK: - View
 
 private struct RewindView: View {
+    @ObservedObject private var octoAppearance = OctoAppearance.shared
     @ObservedObject var model: RewindModel
     let onClose: () -> Void
 

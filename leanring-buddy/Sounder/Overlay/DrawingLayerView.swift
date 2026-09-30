@@ -69,6 +69,7 @@ final class DrawingLayerModel: ObservableObject {
 }
 
 struct DrawingLayerView: View {
+    @ObservedObject private var octoAppearance = OctoAppearance.shared
     @ObservedObject var model: DrawingLayerModel
     let screenFrame: CGRect
 

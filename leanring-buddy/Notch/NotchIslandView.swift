@@ -75,6 +75,9 @@ final class NotchIslandState: ObservableObject {
 
     static let compactWidth: CGFloat = 440
     static let largeWidth: CGFloat = 660
+    /// While Octo listens, thinks, speaks or acts, the collapsed island grows a
+    /// wing this wide on each side of the physical notch: indicator left, word right.
+    static let activityWingWidth: CGFloat = 96
     /// Critically damped springs: no overshoot, so the card never bounces past its edges.
     static let expandAnimation: Animation = .spring(response: 0.42, dampingFraction: 0.88)
     static let collapseAnimation: Animation = .spring(response: 0.34, dampingFraction: 0.92)
@@ -119,14 +122,15 @@ struct NotchIslandView: View {
                 .allowsHitTesting(state.isExpanded && state.isCardContentVisible)
 
             collapsedContent
-                .frame(width: state.collapsedSize.width, height: state.collapsedSize.height)
+                .frame(width: collapsedWidth, height: state.collapsedSize.height)
                 .opacity(state.isCollapsedFaceVisible ? 1 : 0)
                 .allowsHitTesting(false)
         }
-        .frame(width: state.isExpanded ? state.expandedWidth : state.collapsedSize.width,
+        .frame(width: state.isExpanded ? state.expandedWidth : collapsedWidth,
                height: state.isExpanded ? measuredCardContentHeight : state.collapsedSize.height,
                alignment: .top)
         .clipShape(shape)
+        .animation(NotchIslandState.expandAnimation, value: activity)
         .shadow(color: .black.opacity(state.isExpanded ? 0.35 : 0), radius: 22, x: 0, y: 10)
         .background(
             GeometryReader { islandGeometry in
@@ -185,25 +189,140 @@ struct NotchIslandView: View {
         )
     }
 
-    /// Eyes when idle, waveform while listening, a pulse while thinking, bouncing eyes while talking.
+    /// What Octo is doing right now, if anything. Acting wins: the agent flips the
+    /// voice state around while it points and clicks.
+    private var activity: NotchActivity? {
+        if companionManager.isActing { return .acting }
+        if companionManager.voiceState == .listening { return .listening }
+        if companionManager.isSpeaking { return .speaking }
+        switch companionManager.voiceState {
+        case .processing: return .thinking
+        case .responding: return .speaking
+        case .idle, .listening: return nil
+        }
+    }
+
+    /// The physical notch hides anything drawn behind it, so while Octo is busy the
+    /// island grows a wing on each side: the indicator on the left, the word on the right.
+    private var collapsedWidth: CGFloat {
+        state.collapsedSize.width + (activity == nil ? 0 : NotchIslandState.activityWingWidth * 2)
+    }
+
+    /// Eyes behind the notch when idle; while busy, an indicator and a word on the wings.
     private var collapsedContent: some View {
-        HStack(spacing: 6) {
-            switch companionManager.voiceState {
-            case .listening:
-                NotchWaveformIndicator(audioPowerLevel: companionManager.currentAudioPowerLevel)
-            case .processing:
-                NotchPulseIndicator()
-            case .idle, .responding:
-                NotchEyesIndicator(isTalking: companionManager.voiceState == .responding, isHovering: state.isHovering)
+        HStack(spacing: 0) {
+            if let activity {
+                NotchActivityIndicator(activity: activity, audioPowerLevel: companionManager.currentAudioPowerLevel)
+                    .frame(width: NotchIslandState.activityWingWidth)
+                    .transition(.opacity)
+            }
+            HStack(spacing: 6) {
+                NotchEyesIndicator(isTalking: activity == .speaking, isHovering: state.isHovering)
+            }
+            .frame(width: state.collapsedSize.width)
+            if let activity {
+                Text(activity.label)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundColor(DS.Colors.overlayCursorBlue)
+                    .lineLimit(1)
+                    .frame(width: NotchIslandState.activityWingWidth)
+                    .transition(.opacity)
+                    .id(activity)
             }
         }
         .padding(.top, 3)
     }
 }
 
+enum NotchActivity: Equatable {
+    case listening
+    case thinking
+    case speaking
+    case acting
+
+    var label: String {
+        switch self {
+        case .listening: return "Listening"
+        case .thinking: return "Thinking"
+        case .speaking: return "Speaking"
+        case .acting: return "Acting"
+        }
+    }
+}
+
+// MARK: - Activity wing
+
+/// The left wing: a waveform while listening, a pulse while thinking, talking eyes
+/// while speaking, a moving cursor while acting.
+private struct NotchActivityIndicator: View {
+    @ObservedObject private var octoAppearance = OctoAppearance.shared
+    let activity: NotchActivity
+    let audioPowerLevel: CGFloat
+
+    var body: some View {
+        ZStack {
+            switch activity {
+            case .listening:
+                NotchWaveformIndicator(audioPowerLevel: audioPowerLevel)
+            case .thinking:
+                NotchPulseIndicator()
+            case .speaking:
+                NotchTalkingBarsIndicator()
+            case .acting:
+                NotchActingIndicator()
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Three bars that bob while the voice plays, like a tiny equaliser.
+private struct NotchTalkingBarsIndicator: View {
+    @ObservedObject private var octoAppearance = OctoAppearance.shared
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+            HStack(spacing: 3) {
+                ForEach(0..<4, id: \.self) { index in
+                    RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                        .fill(DS.Colors.overlayCursorBlue)
+                        .frame(width: 3, height: barHeight(index: index, date: context.date))
+                }
+            }
+        }
+    }
+
+    private func barHeight(index: Int, date: Date) -> CGFloat {
+        let phase = CGFloat(date.timeIntervalSinceReferenceDate * 7) + CGFloat(index) * 1.1
+        return 5 + (sin(phase) + 1) * 5
+    }
+}
+
+/// A small pointer that glides in a loop: Octo is moving the cursor.
+private struct NotchActingIndicator: View {
+    @ObservedObject private var octoAppearance = OctoAppearance.shared
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+            let phase = CGFloat(context.date.timeIntervalSinceReferenceDate * 1.6)
+            ZStack {
+                Circle()
+                    .stroke(DS.Colors.overlayCursorBlue.opacity(0.35), lineWidth: 1.5)
+                    .frame(width: 14, height: 14)
+                    .scaleEffect(1 + (sin(phase * 2) + 1) * 0.12)
+                Image(systemName: "cursorarrow")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(DS.Colors.overlayCursorBlue)
+                    .offset(x: sin(phase) * 5, y: cos(phase * 1.3) * 3)
+            }
+        }
+    }
+}
+
 // MARK: - Collapsed indicators
 
 private struct NotchEyesIndicator: View {
+    @ObservedObject private var octoAppearance = OctoAppearance.shared
     let isTalking: Bool
     let isHovering: Bool
     @State private var isBlinking = false
@@ -236,6 +355,7 @@ private struct NotchEyesIndicator: View {
 }
 
 private struct NotchWaveformIndicator: View {
+    @ObservedObject private var octoAppearance = OctoAppearance.shared
     let audioPowerLevel: CGFloat
     private let profile: [CGFloat] = [0.5, 0.8, 1.0, 0.8, 0.5]
 
@@ -259,6 +379,7 @@ private struct NotchWaveformIndicator: View {
 }
 
 private struct NotchPulseIndicator: View {
+    @ObservedObject private var octoAppearance = OctoAppearance.shared
     @State private var isPulsing = false
 
     var body: some View {

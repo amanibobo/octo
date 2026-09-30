@@ -96,10 +96,10 @@ final class GeneralModePipeline {
             "point_label": ["type": ["string", "null"]],
             "highlights": ["type": "array", "items": ["type": "object", "properties": ["element_id": ["type": "integer"], "quote": ["type": "string"]], "required": ["element_id", "quote"]]],
             "media_query": ["type": ["string", "null"]],
-            "media_kind": ["type": ["string", "null"], "enum": ["paper", "image", "video", "link", NSNull()]],
+            "media_kind": JSONSchemaTools.nullableEnum(["type": ["string", "null"]], values: ["paper", "image", "video", "link"]),
             "route_element_ids": ["type": "array", "items": ["type": "integer"]],
             "route_labels": ["type": "array", "items": ["type": "string"]],
-            "route_kind": ["type": ["string", "null"], "enum": ["flow", "guide", NSNull()]],
+            "route_kind": JSONSchemaTools.nullableEnum(["type": ["string", "null"]], values: ["flow", "guide"]),
             "sketch_diagram": ["type": "boolean"]
         ],
         "required": ["speak", "point_element_id", "point_quote", "point_label", "highlights", "media_query", "media_kind", "route_element_ids", "route_labels", "route_kind", "sketch_diagram"]

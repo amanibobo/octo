@@ -52,7 +52,9 @@ final class ClaudeChatClient: ChatModelClient {
         requestBody["tools"] = [[
             "name": "answer",
             "description": "Return the structured answer. Call this exactly once with the complete answer.",
-            "strict": true,
+            // Not `strict`: strict mode compiles a grammar per distinct schema (~2 s, and
+            // again every turn because the id enums change), which measured 14 s per
+            // answer. The enums still steer the model; the app verifies every id anyway.
             "input_schema": JSONSchemaTools.strict(jsonSchema)
         ]]
         requestBody["tool_choice"] = ["type": "tool", "name": "answer"]

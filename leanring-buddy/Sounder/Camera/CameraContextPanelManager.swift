@@ -201,6 +201,7 @@ private struct CameraPreviewView: NSViewRepresentable {
 }
 
 private struct CameraContextView: View {
+    @ObservedObject private var octoAppearance = OctoAppearance.shared
     @ObservedObject var model: CameraContextModel
     let session: AVCaptureSession
     let onClose: () -> Void

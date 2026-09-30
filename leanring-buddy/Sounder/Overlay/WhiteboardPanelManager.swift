@@ -149,6 +149,7 @@ final class WhiteboardPanelManager {
 // MARK: - View
 
 private struct WhiteboardView: View {
+    @ObservedObject private var octoAppearance = OctoAppearance.shared
     @ObservedObject var model: WhiteboardModel
     let padding: CGFloat
 

@@ -56,6 +56,7 @@ class OverlayWindow: NSWindow {
 /// blink every few seconds. Kept as its own view so the blink timer lives
 /// with the eyes and the overlay only positions/rotates the whole sprite.
 struct BuddySquareSpriteView: View {
+    @ObservedObject private var octoAppearance = OctoAppearance.shared
     @State private var isBlinking = false
     @State private var blinkTimer: Timer?
 
@@ -204,6 +205,7 @@ enum BuddyNavigationMode {
 // replaced by a waveform (listening), spinner (processing), or
 // streaming text bubble (responding).
 struct BlueCursorView: View {
+    @ObservedObject private var octoAppearance = OctoAppearance.shared
     let screenFrame: CGRect
     let isFirstAppearance: Bool
     @ObservedObject var companionManager: CompanionManager
@@ -868,6 +870,7 @@ struct BlueCursorView: View {
 /// A small blue waveform that replaces the triangle cursor while
 /// the user is holding the push-to-talk shortcut and speaking.
 private struct BlueCursorWaveformView: View {
+    @ObservedObject private var octoAppearance = OctoAppearance.shared
     let audioPowerLevel: CGFloat
 
     private let barCount = 5
@@ -908,6 +911,7 @@ private struct BlueCursorWaveformView: View {
 /// A small blue spinning indicator that replaces the triangle cursor
 /// while the AI is processing a voice input.
 private struct BlueCursorSpinnerView: View {
+    @ObservedObject private var octoAppearance = OctoAppearance.shared
     @State private var isSpinning = false
 
     var body: some View {

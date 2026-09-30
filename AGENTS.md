@@ -106,6 +106,8 @@ Worker vars: `FIREWORKS_CHAT_MODEL`, `FIREWORKS_TRANSCRIPTION_MODEL`, `ELEVENLAB
 
 **Grounding by ID**: The LLM never emits pixel coordinates. It receives numbered elements (Set-of-Mark) and returns IDs; Data-mode drawings are built from analysis results (row indices / column names), never from prose.
 
+**Claude call hygiene**: every `completeJSON` passes an `effort` (`xhigh` plan, `high` act/verify, `medium` answers, `low` narration/translation) and enough `max_tokens` that a `max_tokens` stop is treated as an error. Element-id fields get a per-turn `enum` of the ids on screen (`JSONSchemaTools.settingEnum`); nullable enums must be `anyOf` (`nullableEnum`). Tools are **not** `strict`: strict mode compiles a grammar per distinct schema (~2 s, every turn with per-turn enums; measured 14 s per answer). The agent may answer `ask_user` / `cannot_determine` instead of guessing; each history line ends with "screen changed" / "no visible change" and a repeat or two dead actions inject a redirect note.
+
 **Planner sees no data**: The Data-mode planner prompt contains column names, types and the row count only. Spoken numbers are produced by the analysis service; the LLM may rephrase and the app rejects a rephrase that drops any number.
 
 **OCR warm-up**: Vision loads its text models on the first request (~7 s). `ScreenTextRecognizer.warmUp()` runs at launch so the first hotkey costs ~0.4 s.
@@ -121,8 +123,9 @@ Worker vars: `FIREWORKS_CHAT_MODEL`, `FIREWORKS_TRANSCRIPTION_MODEL`, `ELEVENLAB
 | `MenuBarPanelManager.swift` | ~243 | NSStatusItem + custom NSPanel lifecycle (fallback on Macs without a notch; the status item toggles the notch otherwise). |
 | `NotchPanelManager.swift` | ~250 | Notch canvas panel, hover/outside-click expand-collapse, notch geometry. |
 | `NotchPanelContentView.swift` | ~210 | Expanded card: status, mode capsule + per-mode description and example, last run, hotkey chips, settings button. |
-| `Notch/NotchIslandView.swift` | ~230 | `NotchSilhouetteShape`, `NotchIslandState`, island view (collapsed eyes/waveform/pulse, expanded card or settings). |
-| `Notch/NotchSettingsView.swift` | ~145 | Settings page: hotkey chord, on-device transcription, captions, buddy visibility, clipboard fallback, service status, calibrate, quit. |
+| `Notch/NotchIslandView.swift` | ~380 | `NotchSilhouetteShape`, `NotchIslandState`, island view. Collapsed: eyes behind the notch; while listening/thinking/speaking/acting the island grows a 96 pt wing each side (indicator left, word right) since the physical notch hides the middle. |
+| `Notch/NotchSettingsView.swift` | ~430 | Settings page with vertical tabs (Hotkey, Voice, Memory, Buddy, Services, About): hotkey chord, transcription, captions, Octo colour swatches, buddy visibility, clipboard fallback, rehearsal, service status, calibrate. |
+| `Sounder/OctoAppearance.swift` | ~65 | `OctoAccent` presets + `OctoAppearance.shared` (persisted `octoAccentColor`). `DS.Colors.overlayCursorBlue` reads it; every view that paints with it observes the singleton so a new pick repaints at once. |
 | `Notch/SkyLightOperator.swift` | ~75 | Private SkyLight space at max level for the notch window (dlsym, optional). |
 | `Notch/NotchContextView.swift` | ~270 | Context page: pinned items list, add field, Paste / Image… buttons, drag-and-drop. |
 | `Notch/NotchModeVignetteView.swift` | ~190 | Animated per-mode "Octo in use" scene drawn in a Canvas. |

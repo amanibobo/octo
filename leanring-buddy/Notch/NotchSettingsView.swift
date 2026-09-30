@@ -10,6 +10,7 @@ import AppKit
 import SwiftUI
 
 struct NotchSettingsView: View {
+    @ObservedObject private var octoAppearance = OctoAppearance.shared
     @ObservedObject var companionManager: CompanionManager
     let onBack: () -> Void
 
@@ -206,6 +207,9 @@ struct NotchSettingsView: View {
             SettingsSectionHeader(title: "Buddy", subtitle: "The companion on your cursor, and how the Agent behaves.")
             SettingsGroup {
                 SettingsRow {
+                    OctoColorRow()
+                }
+                SettingsRow {
                     NotchToggleRow(title: "Always visible", detail: "Off shows the buddy only while it works.",
                                    isOn: companionManager.isClickyCursorEnabled) { companionManager.setClickyCursorEnabled($0) }
                 }
@@ -307,6 +311,61 @@ struct NotchSettingsView: View {
 // MARK: - Grouped form pieces
 
 /// A macOS-settings-style group: rounded panel, rows separated by inset hairlines.
+/// Octo's colour: a row of swatches; the picked one wears a ring and everything repaints at once.
+private struct OctoColorRow: View {
+    @ObservedObject private var octoAppearance = OctoAppearance.shared
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Colour")
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundColor(.white.opacity(0.92))
+                Text("Octo's body, the notch, and every drawing.")
+                    .font(.system(size: 11))
+                    .foregroundColor(.white.opacity(0.42))
+            }
+            Spacer(minLength: 8)
+            HStack(spacing: 7) {
+                ForEach(OctoAccent.allCases) { accent in
+                    OctoColorSwatch(accent: accent, isSelected: octoAppearance.accent == accent) {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { octoAppearance.accent = accent }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct OctoColorSwatch: View {
+    let accent: OctoAccent
+    let isSelected: Bool
+    let onPick: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: onPick) {
+            Circle()
+                .fill(accent.color)
+                .frame(width: 14, height: 14)
+                .overlay(Circle().stroke(Color.black.opacity(0.35), lineWidth: 1))
+                .overlay(
+                    Circle()
+                        .stroke(Color.white.opacity(isSelected ? 0.95 : (isHovering ? 0.4 : 0)), lineWidth: 2)
+                        .frame(width: 20, height: 20)
+                )
+                .scaleEffect(isSelected || isHovering ? 1.12 : 1)
+                .frame(width: 22, height: 22)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+        .onHover { isHovering = $0 }
+        .animation(.spring(response: 0.25, dampingFraction: 0.75), value: isHovering)
+        .help(accent.displayName)
+    }
+}
+
 private struct SettingsGroup<Content: View>: View {
     @ViewBuilder let content: () -> Content
 

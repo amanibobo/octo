@@ -131,6 +131,7 @@ final class MediaCardPanelManager {
 }
 
 private struct MediaCardView: View {
+    @ObservedObject private var octoAppearance = OctoAppearance.shared
     @ObservedObject var model: MediaCardModel
     let onOpen: (URL) -> Void
     @State private var isHovering = false

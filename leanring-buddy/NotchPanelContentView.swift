@@ -11,6 +11,7 @@
 import SwiftUI
 
 struct NotchPanelContentView: View {
+    @ObservedObject private var octoAppearance = OctoAppearance.shared
     @ObservedObject var companionManager: CompanionManager
     @ObservedObject var userContextStore: UserContextStore
     let isLarge: Bool
@@ -367,6 +368,7 @@ struct NotchPanelContentView: View {
 /// A quiet capsule that brightens on hover and presses down slightly, in the
 /// same glass language as the mode control.
 private struct QuickActionButton: View {
+    @ObservedObject private var octoAppearance = OctoAppearance.shared
     let title: String
     let isEnabled: Bool
     let action: () -> Void
