@@ -323,7 +323,7 @@ nonisolated enum InkSegmenter {
 nonisolated enum ScreenElementDetector {
     /// Turns OCR lines into numbered Set-of-Mark elements. Capped so the prompt
     /// stays small; lines are kept in reading order so IDs are predictable.
-    static func makeElements(from lines: [RecognizedTextLine], maximumCount: Int = 160) -> [ScreenElement] {
+    static func makeElements(from lines: [RecognizedTextLine], maximumCount: Int = 240) -> [ScreenElement] {
         var elements: [ScreenElement] = []
         for line in lines.prefix(maximumCount) {
             elements.append(ScreenElement(

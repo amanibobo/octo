@@ -35,7 +35,24 @@ final class GeneralModePipeline {
     }
 
     private let chatClient: any ChatModelClient
-    private static let maximumElementsSentToModel = 100
+    /// A dense IDE or spreadsheet screen has 200+ OCR lines. Capping at 100 made the
+    /// model say "i don't see it" for anything past the cap (measured: 4 of 27 eval
+    /// misses, all of them). The element list is short text per line, so 240 is cheap.
+    private static let maximumElementsSentToModel = 240
+
+    /// Two-pass zoom. The whole Retina display goes to the model at ~1280 px wide,
+    /// a third of native, so small text is a smear. When the first pass points at
+    /// or highlights something that small, a second look sends a native-resolution
+    /// crop around it with only the tags inside and asks the model to confirm or
+    /// correct the ids and quotes. The spoken answer stays from the first pass.
+    /// Off for circled regions, which are already sent as a crop.
+    /// Off by default: on the grounding eval it changed no answers and added ~2 s
+    /// per question (eval/grounding, 27 cases: 23/27 either way, 4.3 s vs 6.3 s).
+    static var isZoomPassEnabled = false
+    /// Pixel height, in the first-pass image, below which text counts as unreadable.
+    private static let zoomTriggerHeightInSentPixels: CGFloat = 16
+    private static let zoomCropMinimumSize = CGSize(width: 1100, height: 700)
+    private static let maximumElementsInZoom = 60
 
     private static let cameraAnswerSchema: [String: Any] = [
         "type": "object",
@@ -104,6 +121,116 @@ final class GeneralModePipeline {
         ],
         "required": ["speak", "point_element_id", "point_quote", "point_label", "highlights", "media_query", "media_kind", "route_element_ids", "route_labels", "route_kind", "sketch_diagram"]
     ]
+
+    private static let zoomSchema: [String: Any] = [
+        "type": "object",
+        "properties": [
+            "in_view": ["type": "boolean"],
+            "point_element_id": ["type": ["integer", "null"]],
+            "point_quote": ["type": ["string", "null"]],
+            "highlights": ["type": "array", "items": ["type": "object", "properties": ["element_id": ["type": "integer"], "quote": ["type": "string"]], "required": ["element_id", "quote"]]]
+        ],
+        "required": ["in_view", "point_element_id", "point_quote", "highlights"]
+    ]
+
+    private static let zoomSystemPrompt = """
+    you're octo, taking a closer look. this image is a native-resolution crop of the screen around what you chose a moment ago; the red tags are the same element ids as before. answer the same question again with only what you can now read clearly: point_element_id and point_quote for the one thing to point at (null if pointing isn't right), and highlights for the exact words the user asked about, quoted verbatim from the element list. keep ids that were right and fix any that were wrong. set in_view false if the thing the user asked about is not in this crop at all.
+    """
+
+    struct ZoomResult {
+        let pointedElement: ScreenElement?
+        let pointedRect: CGRect?
+        let highlightedElements: [ScreenElement]
+        let highlightRects: [CGRect]
+    }
+
+    /// Native-resolution second pass around the first pass's targets.
+    private func zoomPass(
+        transcript: String,
+        capture: SounderScreenCapture,
+        elements: [ScreenElement],
+        textLines: [RecognizedTextLine],
+        firstPassPointID: Int?,
+        firstPassHighlightIDs: [Int],
+        around targetRects: [CGRect]
+    ) async throws -> ZoomResult? {
+        let fullBounds = CGRect(x: 0, y: 0, width: capture.cgImage.width, height: capture.cgImage.height)
+        guard let firstTargetRect = targetRects.first else { return nil }
+        let union = targetRects.dropFirst().reduce(firstTargetRect) { $0.union($1) }
+        var crop = union.insetBy(dx: -max(0, (Self.zoomCropMinimumSize.width - union.width) / 2),
+                                 dy: -max(0, (Self.zoomCropMinimumSize.height - union.height) / 2))
+        // Slide inside the screen rather than shrinking, so the context stays.
+        if crop.minX < 0 { crop.origin.x = 0 }
+        if crop.minY < 0 { crop.origin.y = 0 }
+        if crop.maxX > fullBounds.maxX { crop.origin.x = max(0, fullBounds.maxX - crop.width) }
+        if crop.maxY > fullBounds.maxY { crop.origin.y = max(0, fullBounds.maxY - crop.height) }
+        crop = crop.intersection(fullBounds).integral
+        guard crop.width >= 80, crop.height >= 40, let cropped = capture.cgImage.cropping(to: crop) else { return nil }
+
+        let cropElements = elements
+            .filter { element in
+                let box = element.boundingBoxInCapturePixels
+                let overlap = box.intersection(crop)
+                return !overlap.isNull && overlap.width * overlap.height >= 0.6 * box.width * box.height
+            }
+            .prefix(Self.maximumElementsInZoom)
+            .map { element in
+                ScreenElement(id: element.id, kind: element.kind, text: element.text,
+                              boundingBoxInCapturePixels: element.boundingBoxInCapturePixels.offsetBy(dx: -crop.minX, dy: -crop.minY),
+                              confidence: element.confidence)
+            }
+        guard !cropElements.isEmpty,
+              let marked = SetOfMarkRenderer.renderMarkedScreenshot(capture: cropped, elements: Array(cropElements), maximumWidth: 1280) else { return nil }
+
+        let elementListText = cropElements.map { "[\($0.id)] \(String($0.text.prefix(70)))" }.joined(separator: "\n")
+        var earlier = ""
+        if let firstPassPointID { earlier += "you pointed at [\(firstPassPointID)]" }
+        if !firstPassHighlightIDs.isEmpty { earlier += (earlier.isEmpty ? "" : " and ") + "highlighted \(firstPassHighlightIDs.map { "[\($0)]" }.joined(separator: ", "))" }
+        let userText = """
+        elements in this crop (id → text):
+        \(elementListText)
+
+        user said: "\(transcript)"
+        \(earlier.isEmpty ? "" : "a moment ago \(earlier). confirm or correct.")
+        """
+        let validIDs: [Any] = cropElements.map(\.id)
+        var schema = JSONSchemaTools.settingEnum(Self.zoomSchema, atPath: ["point_element_id"], values: validIDs + [NSNull()])
+        schema = JSONSchemaTools.settingEnum(schema, atPath: ["highlights", "items", "element_id"], values: validIDs)
+        let startedAt = Date()
+        let object = try await chatClient.completeJSON(
+            systemPrompt: Self.zoomSystemPrompt, userText: userText,
+            images: [ChatModelImage(data: marked.data, mimeType: "image/jpeg")],
+            priorTurns: [], jsonSchema: schema, maxTokens: 500, timeoutSeconds: 20, effort: "low"
+        )
+        guard (object["in_view"] as? Bool) ?? true else {
+            print("🔍 zoom: not in view (\(String(format: "%.1f", Date().timeIntervalSince(startedAt)))s), keeping first pass")
+            return nil
+        }
+        let elementsByID = Dictionary(uniqueKeysWithValues: elements.map { ($0.id, $0) })
+        var pointedElement: ScreenElement?
+        var pointedRect: CGRect?
+        if let id = object["point_element_id"] as? Int, let element = elementsByID[id],
+           let rect = Self.groundedRect(for: (object["point_quote"] as? String) ?? "", in: element, textLines: textLines) {
+            pointedElement = element
+            pointedRect = rect
+        }
+        var highlightedElements: [ScreenElement] = []
+        var highlightRects: [CGRect] = []
+        var seen = Set<Int>()
+        for entry in (object["highlights"] as? [[String: Any]]) ?? [] {
+            guard let id = entry["element_id"] as? Int, let element = elementsByID[id], seen.insert(id).inserted,
+                  let rect = Self.groundedRect(for: (entry["quote"] as? String) ?? "", in: element, textLines: textLines) else { continue }
+            highlightedElements.append(element)
+            highlightRects.append(rect)
+        }
+        guard pointedElement != nil || !highlightedElements.isEmpty else {
+            print("🔍 zoom: nothing grounded, keeping first pass")
+            return nil
+        }
+        let changed = pointedElement?.id != firstPassPointID || Set(highlightedElements.map(\.id)) != Set(firstPassHighlightIDs)
+        print("🔍 zoom: crop \(Int(crop.width))×\(Int(crop.height)) px, \(cropElements.count) elements, \(String(format: "%.1f", Date().timeIntervalSince(startedAt)))s → \(changed ? "corrected" : "confirmed") point \(pointedElement.map { "[\($0.id)]" } ?? "none"), \(highlightedElements.count) highlights")
+        return ZoomResult(pointedElement: pointedElement, pointedRect: pointedRect, highlightedElements: highlightedElements, highlightRects: highlightRects)
+    }
 
     /// The box for a quoted phrase inside an element: the shortest run of that
     /// line's OCR words whose text contains the quote, else the whole element when
@@ -245,16 +372,35 @@ final class GeneralModePipeline {
         }
 
         var pointedElement: ScreenElement?
-        var pointedCenter: CGPoint?
+        var pointedRect: CGRect?
         if let pointedElementID = responseObject["point_element_id"] as? Int, let element = elementsByID[pointedElementID] {
             let quote = (responseObject["point_quote"] as? String) ?? ""
             if let rect = Self.groundedRect(for: quote, in: element, textLines: textLines) {
                 pointedElement = element
-                pointedCenter = CGPoint(x: rect.midX, y: rect.midY)
+                pointedRect = rect
             } else {
                 print("🎯 dropped point [\(pointedElementID)]: quote \"\(quote.prefix(40))\" not in \"\(element.text.prefix(40))\"")
             }
         }
+
+        // Second pass at native resolution when the target was too small to read
+        // in the first-pass image (the whole display squeezed to 1280 px wide).
+        if Self.isZoomPassEnabled, regionOfInterestInCapturePixels == nil {
+            let targetRects = (pointedRect.map { [$0] } ?? []) + highlightRects
+            let sentScale = min(1.0, 1280.0 / CGFloat(max(capture.cgImage.width, 1)))
+            let smallestHeight = targetRects.map(\.height).min() ?? .infinity
+            if !targetRects.isEmpty, smallestHeight * sentScale < Self.zoomTriggerHeightInSentPixels {
+                if let zoomed = try? await zoomPass(transcript: transcript, capture: capture, elements: Array(groundingElements), textLines: textLines,
+                                                    firstPassPointID: pointedElement?.id, firstPassHighlightIDs: highlightedElements.map(\.id), around: targetRects) {
+                    pointedElement = zoomed.pointedElement
+                    pointedRect = zoomed.pointedRect
+                    highlightedElements = zoomed.highlightedElements
+                    highlightRects = zoomed.highlightRects
+                }
+            }
+        }
+
+        let pointedCenter = pointedRect.map { CGPoint(x: $0.midX, y: $0.midY) }
         if let pointedElement, let index = highlightedElements.firstIndex(where: { $0.id == pointedElement.id }) {
             highlightedElements.remove(at: index)
             highlightRects.remove(at: index)

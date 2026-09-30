@@ -205,7 +205,9 @@ final class CompanionManager: ObservableObject {
         guard !accessibilityElements.isEmpty else { return (ocrElements, [:]) }
 
         let pixelsPerPoint = CGFloat(capture.cgImage.width) / max(displayFrame.width, 1)
-        var merged = Array(ocrElements.prefix(100))
+        // Keep every OCR line the detector produced (up to 240): a lower cap here made
+        // the model say "i don't see it" for anything past it on dense screens.
+        var merged = Array(ocrElements.prefix(240))
         var byID: [Int: AccessibilityElement] = [:]
         var nextID = (ocrElements.map(\.id).max() ?? 0) + 1
         for accessibilityElement in accessibilityElements {

@@ -1,0 +1,11 @@
+[
+  {"question": "which file is open in the editor?", "expect": "CompanionManager.swift", "where": "any"},
+  {"question": "where is the terminal menu?", "expect": "Terminal", "where": "point"},
+  {"question": "where's the explorer panel header?", "expect": "EXPLORER", "where": "point"},
+  {"question": "where is the askByText function?", "expect": "askByText", "where": "any"},
+  {"question": "where is the outline section?", "expect": "OUTLINE", "where": "point"},
+  {"question": "which line hides the rewind panel?", "expect": "rewindPanelManager.hide()", "where": "any"},
+  {"question": "point at the DesignSystem file in the sidebar", "expect": "DesignSystem.swift", "where": "point"},
+  {"question": "where does it say Agents Window?", "expect": "Agents Window", "where": "any"},
+  {"question": "where is the timeline section?", "expect": "TIMELINE", "where": "point"}
+]

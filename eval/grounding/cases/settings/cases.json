@@ -1,0 +1,10 @@
+[
+  {"question": "where do i change the wallpaper?", "expect": "Wallpaper", "where": "point"},
+  {"question": "where are the software updates?", "expect": "Software Update", "where": "point"},
+  {"question": "where do i set up time machine?", "expect": "Time Machine", "where": "point"},
+  {"question": "where can i change the language?", "expect": "Language & Region", "where": "point"},
+  {"question": "where is the search box?", "expect": "Search", "where": "point"},
+  {"question": "how do i get to the privacy settings?", "expect": "Privacy & Security", "where": "point"},
+  {"question": "where do i manage login items?", "expect": "Login Items", "where": "point"},
+  {"question": "where's the storage info?", "expect": "Storage", "where": "point"}
+]

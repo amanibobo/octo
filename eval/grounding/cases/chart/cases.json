@@ -1,0 +1,12 @@
+[
+  {"question": "what's her creatinine?", "expect": "1.6 mg/dL", "where": "any"},
+  {"question": "which drug is she taking for insomnia?", "expect": "Zolpidem", "where": "any"},
+  {"question": "how much gabapentin is she on?", "expect": "600 mg", "where": "any"},
+  {"question": "where is her eGFR?", "expect": "32 mL/min", "where": "any"},
+  {"question": "what's the dose of rivaroxaban?", "expect": "20 mg", "where": "any"},
+  {"question": "which medication was added today?", "expect": "Diltiazem", "where": "any"},
+  {"question": "what is her sodium level?", "expect": "134 mmol/L", "where": "any"},
+  {"question": "point at her date of birth", "expect": "06/02/1944", "where": "point"},
+  {"question": "where's the hemoglobin reference range?", "expect": "12.0 - 15.5", "where": "any"},
+  {"question": "what does the plan say about follow-up?", "expect": "Follow-up in 2 weeks", "where": "any"}
+]

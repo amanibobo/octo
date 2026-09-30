@@ -77,7 +77,8 @@ final class AgentModePipeline {
     static let fillerPhrase = "on it"
 
     private let chatClient: any ChatModelClient
-    private static let maximumElementsSentToModel = 120
+    /// OCR lines (up to 240) plus the accessibility elements appended after them; the cap must leave room for both.
+    private static let maximumElementsSentToModel = 320
 
     init(chatClient: any ChatModelClient) {
         self.chatClient = chatClient

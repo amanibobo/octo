@@ -114,6 +114,10 @@ Worker vars: `FIREWORKS_CHAT_MODEL`, `FIREWORKS_TRANSCRIPTION_MODEL`, `ELEVENLAB
 
 **OCR warm-up**: Vision loads its text models on the first request (~7 s). `ScreenTextRecognizer.warmUp()` runs at launch so the first hotkey costs ~0.4 s.
 
+**Element caps**: OCR keeps up to 240 lines, General sends up to 240 elements, Agent up to 320 (OCR plus up to 80 accessibility elements appended after). A dense IDE screen has 200+ lines; a cap below that makes the model say "i don't see it" for anything past it.
+
+**Zoom pass (off)**: `GeneralModePipeline.zoomPass` sends a native-resolution crop around the first pass's targets with only the tags inside and asks the model to confirm or correct ids and quotes. Kept behind `isZoomPassEnabled` for experiments; see the grounding eval numbers before turning it on.
+
 **Vision word boxes are padded**: `VNRecognizedText.boundingBox(for:)` returns boxes padded to roughly the line height, collapsing real 16 px cell gaps to ~3 px. `InkSegmenter` re-splits lines using a luminance projection profile; cell gaps are ≥ 0.36 × line height, spaces are not. Thin 2 px segments (a "1") must be kept.
 
 ## Key Files
@@ -239,6 +243,10 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ## Typechecking without Xcode
 
 `xcodebuild` is off-limits (TCC), but the sources can be typechecked with `swiftc -typecheck` using stub modules for PostHog and Sparkle and the project's flags (`-swift-version 5 -default-isolation MainActor -enable-upcoming-feature MemberImportVisibility ...`). Copy the sources to a temp folder first: this repo lives under `~/Documents`, and iCloud touches file mtimes mid-compile ("input file was modified during the build").
+
+## Grounding eval
+
+`eval/grounding/run.sh` compiles the real pipeline sources (OCR → Set-of-Mark → `GeneralModePipeline` through the proxy) into a CLI and runs saved cases: `cases/<name>/screenshot.png` (native capture) + `cases/<name>/cases.json` (`question`, `expect` quote, `where`: point / highlight / any). A case passes when the pointed or highlighted element's text contains the quote. `./run.sh --dump` lists numbered OCR lines to write questions from; `--zoom` turns the native-resolution second pass on; `--only <case>` runs one screenshot. Results land in `eval/grounding/results/` (gitignored). Baseline on 27 cases across an IDE, a patient chart and System Settings: 23/27 with the old 100-element cap (every miss was an element past the cap), 27/27 expected after raising it; the zoom pass changed no answers and cost ~2 s per question, so it is off by default (`GeneralModePipeline.isZoomPassEnabled`). Measure before changing prompts, tags or caps.
 
 ## Extraction harness
 
