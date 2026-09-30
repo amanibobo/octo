@@ -46,7 +46,7 @@ final class AgentTaskCardPanelManager {
     private var hideTask: Task<Void, Never>?
     /// Reported by the view; the panel is re-fitted whenever it changes.
     private var contentHeight: CGFloat = 120
-    private static let cardWidth: CGFloat = 330
+    private static let cardWidth: CGFloat = 340
     private static let screenMargin: CGFloat = 14
 
     var isShowing: Bool { panel?.isVisible ?? false }
@@ -182,10 +182,14 @@ final class AgentTaskCardPanelManager {
 
 // MARK: - View
 
+/// Styled like the notch card: black, hairlines, small-caps section labels, the
+/// accent only where something is live.
 struct AgentTaskCardView: View {
     @ObservedObject var model: AgentTaskCardModel
     let onContentHeightChange: (CGFloat) -> Void
     @ObservedObject private var octoAppearance = OctoAppearance.shared
+
+    private let horizontalPadding: CGFloat = 22
 
     var body: some View {
         VStack(spacing: 0) {
@@ -202,96 +206,191 @@ struct AgentTaskCardView: View {
     }
 
     private var card: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Text("AGENT")
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .tracking(1.2)
-                    .foregroundColor(.black.opacity(0.85))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(Capsule().fill(DS.Colors.overlayCursorBlue))
-                Spacer()
-                BuddySquareSpriteView()
-                    .scaleEffect(0.85)
-            }
-
-            Text("\u{201C}\(model.task)\u{201D}")
-                .font(.system(size: 13.5, weight: .semibold, design: .rounded))
-                .foregroundColor(.white.opacity(0.95))
-                .lineLimit(3)
-                .fixedSize(horizontal: false, vertical: true)
-
-            if !model.steps.isEmpty {
-                VStack(alignment: .leading, spacing: 7) {
-                    ForEach(model.steps) { step in
-                        AgentTaskCardStepRow(step: step)
-                            .transition(.opacity)
-                    }
-                }
-                .padding(.top, 2)
-            }
-
-            HStack(spacing: 6) {
-                if !model.isFinished {
-                    AgentTaskCardSpinner()
-                } else {
-                    Image(systemName: model.didSucceed ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(model.didSucceed ? DS.Colors.overlayCursorBlue : Color(red: 1, green: 0.62, blue: 0.3))
-                }
-                Text(model.statusLine)
-                    .font(.system(size: 11.5))
-                    .foregroundColor(.white.opacity(0.6))
-                    .lineLimit(3)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.top, 2)
+        VStack(alignment: .leading, spacing: 0) {
+            header
+                .padding(.horizontal, horizontalPadding)
+                .padding(.top, 18)
+                .padding(.bottom, 14)
+            taskTitle
+                .padding(.horizontal, horizontalPadding)
+                .padding(.bottom, 18)
+            hairline
+            stepsSection
+                .padding(.horizontal, horizontalPadding)
+                .padding(.vertical, 16)
+            hairline
+            footer
+                .padding(.horizontal, horizontalPadding)
+                .padding(.top, 14)
+                .padding(.bottom, 18)
         }
-        .padding(16)
-        .frame(width: 330, alignment: .leading)
-        .background(GlassCardBackground(cornerRadius: 18))
+        .frame(width: 340, alignment: .leading)
+        .background(cardBackground)
         .environment(\.colorScheme, .dark)
+    }
+
+    private var cardBackground: some View {
+        RoundedRectangle(cornerRadius: 22, style: .continuous)
+            .fill(Color.black)
+            .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(Color.white.opacity(0.12), lineWidth: 1))
+    }
+
+    private var taskTitle: some View {
+        Text("\u{201C}\(model.task)\u{201D}")
+            .font(.system(size: 15, weight: .semibold, design: .rounded))
+            .foregroundColor(.white.opacity(0.95))
+            .lineLimit(3)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var stepsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("STEPS")
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .foregroundColor(.white.opacity(0.45))
+                .tracking(0.8)
+            if model.steps.isEmpty {
+                Text(model.isFinished ? "no steps were needed" : "working out the steps…")
+                    .font(.system(size: 12.5))
+                    .foregroundColor(.white.opacity(0.5))
+            } else {
+                stepRows
+            }
+        }
+    }
+
+    private var stepRows: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(model.steps.enumerated()), id: \.element.id) { index, step in
+                AgentTaskCardStepRow(step: step, number: index + 1, isLast: index == model.steps.count - 1)
+                    .transition(.opacity)
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.white.opacity(0.04))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.white.opacity(0.06), lineWidth: 1))
+        )
+    }
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            BuddySquareSpriteView()
+            Text("AGENT")
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .foregroundColor(.white.opacity(0.45))
+                .tracking(0.8)
+            Spacer()
+            statusPill
+        }
+    }
+
+    /// Live: spinner + "working". Finished: a check (or a warning) + "done" / "stopped".
+    private var statusPill: some View {
+        HStack(spacing: 6) {
+            if !model.isFinished {
+                AgentTaskCardSpinner()
+                Text(model.steps.isEmpty ? "planning" : "working")
+            } else {
+                Image(systemName: model.didSucceed ? "checkmark" : "exclamationmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundColor(model.didSucceed ? DS.Colors.overlayCursorBlue : Color(red: 1, green: 0.7, blue: 0.4))
+                Text(model.didSucceed ? "done" : "stopped")
+            }
+        }
+        .font(.system(size: 11, weight: .medium, design: .rounded))
+        .foregroundColor(.white.opacity(0.75))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(
+            Capsule()
+                .fill(Color.white.opacity(0.06))
+                .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+        )
+        .animation(.easeInOut(duration: 0.25), value: model.isFinished)
+    }
+
+    private var footer: some View {
+        Text(model.statusLine)
+            .font(.system(size: 12))
+            .foregroundColor(.white.opacity(model.isFinished ? 0.75 : 0.5))
+            .lineLimit(4)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var hairline: some View {
+        Rectangle()
+            .fill(Color.white.opacity(0.07))
+            .frame(height: 1)
     }
 }
 
 private struct AgentTaskCardStepRow: View {
     @ObservedObject private var octoAppearance = OctoAppearance.shared
     let step: AgentTaskCardStep
+    let number: Int
+    let isLast: Bool
     @State private var isPulsing = false
 
     var body: some View {
-        HStack(alignment: .top, spacing: 9) {
-            ZStack {
-                switch step.status {
-                case .pending:
-                    Circle().stroke(Color.white.opacity(0.28), lineWidth: 1.4)
-                case .active:
-                    Circle().fill(DS.Colors.overlayCursorBlue)
-                        .scaleEffect(isPulsing ? 1.0 : 0.72)
-                        .shadow(color: DS.Colors.overlayCursorBlue.opacity(0.6), radius: 5)
-                case .done:
-                    Circle().fill(DS.Colors.overlayCursorBlue.opacity(0.22))
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 7.5, weight: .bold))
-                        .foregroundColor(DS.Colors.overlayCursorBlue)
-                case .failed:
-                    Circle().fill(Color.white.opacity(0.1))
-                    Image(systemName: "xmark")
-                        .font(.system(size: 7.5, weight: .bold))
-                        .foregroundColor(.white.opacity(0.6))
-                }
+        VStack(spacing: 0) {
+            HStack(alignment: .center, spacing: 12) {
+                marker
+                    .frame(width: 18, height: 18)
+                Text(step.title)
+                    .font(.system(size: 12.5, weight: step.status == .active ? .semibold : .regular))
+                    .foregroundColor(.white.opacity(step.status == .pending ? 0.5 : (step.status == .active ? 0.95 : 0.78)))
+                    .strikethrough(step.status == .failed, color: .white.opacity(0.4))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
             }
-            .frame(width: 14, height: 14)
-            .padding(.top, 1)
-            .onAppear { withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) { isPulsing = true } }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            if !isLast {
+                Rectangle()
+                    .fill(Color.white.opacity(0.07))
+                    .frame(height: 1)
+                    .padding(.leading, 44)
+            }
+        }
+    }
 
-            Text(step.title)
-                .font(.system(size: 12, weight: step.status == .active ? .semibold : .regular))
-                .foregroundColor(.white.opacity(step.status == .pending ? 0.5 : (step.status == .active ? 0.95 : 0.75)))
-                .strikethrough(step.status == .failed, color: .white.opacity(0.4))
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
+    /// Pending: the step number in a ring. Active: the accent, breathing. Done: a check. Failed: a cross.
+    @ViewBuilder
+    private var marker: some View {
+        switch step.status {
+        case .pending:
+            ZStack {
+                Circle().stroke(Color.white.opacity(0.18), lineWidth: 1.2)
+                Text("\(number)")
+                    .font(.system(size: 9, weight: .semibold, design: .rounded))
+                    .foregroundColor(.white.opacity(0.45))
+            }
+        case .active:
+            ZStack {
+                Circle().fill(DS.Colors.overlayCursorBlue.opacity(0.22))
+                Circle().fill(DS.Colors.overlayCursorBlue)
+                    .frame(width: 8, height: 8)
+                    .scaleEffect(isPulsing ? 1.0 : 0.7)
+                    .shadow(color: DS.Colors.overlayCursorBlue.opacity(0.7), radius: 5)
+            }
+            .onAppear { withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) { isPulsing = true } }
+        case .done:
+            ZStack {
+                Circle().fill(DS.Colors.overlayCursorBlue.opacity(0.18))
+                Image(systemName: "checkmark")
+                    .font(.system(size: 8.5, weight: .bold))
+                    .foregroundColor(DS.Colors.overlayCursorBlue)
+            }
+        case .failed:
+            ZStack {
+                Circle().fill(Color.white.opacity(0.08))
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundColor(.white.opacity(0.55))
+            }
         }
     }
 }
@@ -304,7 +403,7 @@ private struct AgentTaskCardSpinner: View {
         Circle()
             .trim(from: 0.15, to: 0.85)
             .stroke(DS.Colors.overlayCursorBlue, style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
-            .frame(width: 10, height: 10)
+            .frame(width: 9, height: 9)
             .rotationEffect(.degrees(isSpinning ? 360 : 0))
             .onAppear { withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) { isSpinning = true } }
     }
