@@ -382,8 +382,22 @@ final class CompanionManager: ObservableObject {
 
     /// Agent rehearsal: act the plan out with a ghost cursor and wait for "go" before doing it.
     @Published private(set) var isAgentRehearsalEnabled: Bool = UserDefaults.standard.object(forKey: "octoAgentRehearsalEnabled") == nil
-        ? true
+        ? false
         : UserDefaults.standard.bool(forKey: "octoAgentRehearsalEnabled")
+
+    /// "rehearse …", "show me the plan first", "dry run …" ask for a rehearsal on this task only.
+    private static func rehearsalRequested(in transcript: String) -> (wanted: Bool, task: String) {
+        let lowered = transcript.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let prefixes = ["rehearse ", "dry run ", "show me the plan for ", "show me the plan to ", "plan first ", "plan out ", "walk me through before you "]
+        for prefix in prefixes where lowered.hasPrefix(prefix) {
+            return (true, String(transcript.dropFirst(prefix.count)))
+        }
+        let suffixes = [" but rehearse first", " but show me the plan first", " show me the plan first", " rehearse first", " plan first"]
+        for suffix in suffixes where lowered.hasSuffix(suffix) {
+            return (true, String(transcript.dropLast(suffix.count)))
+        }
+        return (false, transcript)
+    }
 
     func setAgentRehearsalEnabled(_ isEnabled: Bool) {
         isAgentRehearsalEnabled = isEnabled
@@ -923,9 +937,10 @@ final class CompanionManager: ObservableObject {
             // Tasks next ("open spotify and play…"), then Rx, then General.
             let shouldRunAgentMode = selectedMode == .agent
                 || (selectedMode == .automatic && AgentModePipeline.looksLikeTask(transcript))
-            if shouldRunAgentMode {
-                if isAgentRehearsalEnabled {
-                    try await rehearseAgentTask(task: transcript, redirect: nil, previousNotes: nil, screenAnalysis: screenAnalysis, report: &report)
+            let rehearsalRequest = Self.rehearsalRequested(in: transcript)
+            if shouldRunAgentMode || rehearsalRequest.wanted {
+                if isAgentRehearsalEnabled || rehearsalRequest.wanted {
+                    try await rehearseAgentTask(task: rehearsalRequest.task, redirect: nil, previousNotes: nil, screenAnalysis: screenAnalysis, report: &report)
                 } else {
                     try await runAgentMode(task: transcript, firstScreenAnalysis: screenAnalysis, report: &report)
                 }
