@@ -611,6 +611,21 @@ final class CompanionManager: ObservableObject {
 
     /// Polls the analysis service and the Worker so the panel can show whether
     /// the demo is fully wired before anyone presses the hotkey.
+    /// Runs a command as if it had been spoken (quick-action buttons in the card).
+    func askByText(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, currentResponseTask == nil else { return }
+        NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
+        mediaCardPanelManager.hide()
+        rewindPanelManager.hide()
+        whiteboardPanelManager.hide()
+        endGuidedRoute()
+        drawingLayerModel.clear()
+        lastTranscript = trimmed
+        pendingScreenAnalysisTask = makeScreenAnalysisTask()
+        runInteraction(transcript: trimmed)
+    }
+
     #if DEBUG
     /// Dev hook: a typed question dropped at ~/Library/Logs/Sounder/ask.txt runs as if spoken.
     private var typedQuestionTimer: Timer?

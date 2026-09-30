@@ -41,6 +41,14 @@ struct NotchPanelContentView: View {
                 .padding(.top, 18)
 
             if isLarge {
+                quickActions
+                    .padding(.horizontal, horizontalPadding)
+                    .padding(.vertical, 14)
+                hairline
+                commandSheet
+                    .padding(.horizontal, horizontalPadding)
+                    .padding(.vertical, 14)
+                hairline
                 recentRuns
                     .padding(.horizontal, horizontalPadding)
                     .padding(.vertical, 14)
@@ -85,20 +93,8 @@ struct NotchPanelContentView: View {
                     .lineLimit(1)
             }
             Spacer()
-            HStack(spacing: 6) {
-                HStack(spacing: 7) {
-                    serviceDot(isHealthy: companionManager.isWorkerReachable, label: "Claude")
-                    serviceDot(isHealthy: companionManager.isAnalysisServiceReachable, label: "Clinical rules")
-                    serviceDot(isHealthy: true, label: "Voice · \(companionManager.buddyDictationManager.transcriptionProviderDisplayName)")
-                    NotchInfoTip(text: "Service status, left to right: the language model proxy, the clinical rules service, and voice. Green is connected. Details and the model in use are under Settings › Services.", width: 210)
-                }
-                .padding(.leading, 9)
-                .padding(.trailing, 4)
-                .padding(.vertical, 5)
-                .background(Capsule().fill(Color.white.opacity(0.06)))
-                NotchIconButton(systemImage: isLarge ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
-                                isActive: isLarge, help: isLarge ? "Compact card" : "Larger card", action: onToggleLarge)
-            }
+            NotchIconButton(systemImage: isLarge ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                            isActive: isLarge, help: isLarge ? "Compact card" : "Larger card", action: onToggleLarge)
         }
     }
 
@@ -112,17 +108,10 @@ struct NotchPanelContentView: View {
         case .processing: return "Thinking…"
         case .responding: return "Speaking"
         case .idle:
+            if !companionManager.isWorkerReachable { return "Proxy unreachable · see Settings › Services" }
             if !companionManager.isOverlayVisible { return "Ready" }
             return "Watching your screen"
         }
-    }
-
-    private func serviceDot(isHealthy: Bool, label: String) -> some View {
-        Circle()
-            .fill(isHealthy ? DS.Colors.overlayCursorBlue : Color(red: 0.95, green: 0.35, blue: 0.3))
-            .frame(width: 6, height: 6)
-            .shadow(color: (isHealthy ? DS.Colors.overlayCursorBlue : Color.red).opacity(0.7), radius: 3)
-            .help(label + (isHealthy ? " · connected" : " · unreachable"))
     }
 
     // MARK: - Modes
@@ -213,6 +202,103 @@ struct NotchPanelContentView: View {
             .frame(height: 1)
     }
 
+    // MARK: - Large-card extras
+
+    private struct QuickAction: Identifiable {
+        let id: String
+        let title: String
+        let systemImage: String
+        let command: String
+    }
+
+    private static let quickActionsList: [QuickAction] = [
+        QuickAction(id: "read", title: "Read this to me", systemImage: "text.book.closed", command: "read this to me"),
+        QuickAction(id: "readable", title: "Make readable", systemImage: "list.bullet.rectangle", command: "make this readable"),
+        QuickAction(id: "translate", title: "Translate", systemImage: "character.book.closed", command: "translate this to english"),
+        QuickAction(id: "screen", title: "What's on screen", systemImage: "eye", command: "what's on my screen?"),
+        QuickAction(id: "camera", title: "Camera", systemImage: "camera", command: "camera, what am i holding?"),
+        QuickAction(id: "rewind", title: "Rewind 1 min", systemImage: "backward.fill", command: "what was on my screen a minute ago?"),
+    ]
+
+    private var quickActions: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Text("QUICK ACTIONS")
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundColor(.white.opacity(0.45))
+                    .tracking(0.8)
+                NotchInfoTip(text: "One click runs the command on whatever is on screen right now, the same as saying it.", width: 200)
+            }
+            .zIndex(2)
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                ForEach(Self.quickActionsList) { action in
+                    Button(action: { companionManager.askByText(action.command) }) {
+                        HStack(spacing: 7) {
+                            Image(systemName: action.systemImage)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(DS.Colors.overlayCursorBlue)
+                                .frame(width: 16)
+                            Text(action.title)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(.white.opacity(0.88))
+                                .lineLimit(1)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .fill(Color.white.opacity(0.06))
+                                .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(Color.white.opacity(0.07), lineWidth: 1))
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .pointerCursor()
+                    .disabled(companionManager.voiceState != .idle)
+                    .opacity(companionManager.voiceState != .idle ? 0.5 : 1)
+                }
+            }
+        }
+    }
+
+    private static let commandSheetList: [(say: String, does: String)] = [
+        ("\u{201C}what does this mean?\u{201D} + circle", "answers about just that area"),
+        ("hold still over a word", "explains it without speaking"),
+        ("\u{201C}copy this table as csv\u{201D} + circle", "clean table on the clipboard"),
+        ("\u{201C}times 1.2\u{201D} + circle a number", "result drawn beside it"),
+        ("\u{201C}clearer\u{201D} + circle a paragraph", "rewrite painted in place"),
+        ("\u{201C}how does this flow?\u{201D}", "numbered arrows across the screen"),
+        ("\u{201C}show me how to …\u{201D}", "a route that lights as you click"),
+        ("\u{201C}rehearse open spotify and …\u{201D}", "ghost run first, then \u{201C}go\u{201D}"),
+    ]
+
+    private var commandSheet: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Text("SAY IT")
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundColor(.white.opacity(0.45))
+                    .tracking(0.8)
+                NotchInfoTip(text: "A few phrasings Octo listens for. Any natural wording works; these are the ones that trigger the special drawings.", width: 210)
+            }
+            .zIndex(2)
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)], alignment: .leading, spacing: 7) {
+                ForEach(Array(Self.commandSheetList.enumerated()), id: \.offset) { _, entry in
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(entry.say)
+                            .font(.system(size: 11.5, weight: .medium))
+                            .foregroundColor(.white.opacity(0.85))
+                            .lineLimit(1)
+                        Text(entry.does)
+                            .font(.system(size: 10.5))
+                            .foregroundColor(.white.opacity(0.42))
+                            .lineLimit(1)
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: - Runs
 
     @ViewBuilder
@@ -237,7 +323,7 @@ struct NotchPanelContentView: View {
                         .tracking(0.8)
                     NotchInfoTip(text: "Your last few questions, which mode handled each, and how long it took. Timings are capture, reading the screen, and the model.", width: 210)
                 }
-                ForEach(Array(companionManager.recentInteractionReports.prefix(4).enumerated()), id: \.offset) { index, report in
+                ForEach(Array(companionManager.recentInteractionReports.prefix(6).enumerated()), id: \.offset) { index, report in
                     runRow(report, isFirst: index == 0)
                 }
             }
