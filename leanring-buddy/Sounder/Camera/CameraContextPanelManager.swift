@@ -56,7 +56,7 @@ final class CameraContextPanelManager {
     private let frameSink = LatestFrameSink()
     private var isConfigured = false
     private var hideTask: Task<Void, Never>?
-    private static let panelSize = CGSize(width: 480, height: 372)
+    private static let panelSize = CGSize(width: 660, height: 420)
 
     var isShowing: Bool { panel?.isVisible ?? false }
 
@@ -76,8 +76,10 @@ final class CameraContextPanelManager {
         hideTask?.cancel()
         model.recognizedLines = []
         model.status = "warming up…"
-        let visible = screen.visibleFrame
-        panel.setFrame(NSRect(x: visible.maxX - Self.panelSize.width - 24, y: visible.minY + 24, width: Self.panelSize.width, height: Self.panelSize.height), display: true)
+        // Centred on the screen under the pointer, a touch above the middle.
+        let visible = (NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? screen).visibleFrame
+        panel.setFrame(NSRect(x: visible.midX - Self.panelSize.width / 2, y: visible.midY - Self.panelSize.height / 2 + 30,
+                              width: Self.panelSize.width, height: Self.panelSize.height), display: true)
         if !session.isRunning {
             let session = self.session
             await Task.detached { session.startRunning() }.value
@@ -202,59 +204,80 @@ private struct CameraContextView: View {
     @ObservedObject var model: CameraContextModel
     let session: AVCaptureSession
     let onClose: () -> Void
+    @State private var scanPhase: CGFloat = 0
+
+    private let previewSize = CGSize(width: 640, height: 400)
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Image(systemName: "camera.fill")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundColor(DS.Colors.overlayCursorBlue)
-                Text("CAMERA")
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .foregroundColor(DS.Colors.overlayCursorBlue)
-                    .tracking(0.8)
-                Text(model.status)
-                    .font(.system(size: 11.5, weight: .medium))
-                    .foregroundColor(.white.opacity(0.7))
-                    .lineLimit(1)
-                Spacer()
-                Button(action: onClose) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundColor(.white.opacity(0.6))
-                        .frame(width: 20, height: 20)
-                        .background(Circle().fill(Color.white.opacity(0.1)))
-                }
-                .buttonStyle(.plain)
-                .pointerCursor()
-            }
+        ZStack(alignment: .topLeading) {
             GeometryReader { proxy in
                 ZStack(alignment: .topLeading) {
                     CameraPreviewView(session: session)
-                    // OCR boxes mapped from frame pixels to the aspect-fit preview.
                     if model.frameSize.width > 0 {
                         let scale = min(proxy.size.width / model.frameSize.width, proxy.size.height / model.frameSize.height)
                         let offsetX = (proxy.size.width - model.frameSize.width * scale) / 2
                         let offsetY = (proxy.size.height - model.frameSize.height * scale) / 2
                         ForEach(Array(model.recognizedLines.enumerated()), id: \.offset) { _, line in
                             let box = line.boundingBoxInCapturePixels
-                            RoundedRectangle(cornerRadius: 3, style: .continuous)
-                                .fill(DS.Colors.overlayCursorBlue.opacity(0.16))
-                                .overlay(RoundedRectangle(cornerRadius: 3, style: .continuous).stroke(DS.Colors.overlayCursorBlue.opacity(0.85), lineWidth: 1.5))
-                                .frame(width: box.width * scale + 4, height: box.height * scale + 4)
-                                .offset(x: offsetX + box.minX * scale - 2, y: offsetY + box.minY * scale - 2)
-                                .transition(.opacity)
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .fill(DS.Colors.overlayCursorBlue.opacity(0.14))
+                                .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).stroke(DS.Colors.overlayCursorBlue.opacity(0.9), lineWidth: 1.5))
+                                .frame(width: box.width * scale + 8, height: box.height * scale + 8)
+                                .offset(x: offsetX + box.minX * scale - 4, y: offsetY + box.minY * scale - 4)
+                                .transition(.opacity.combined(with: .scale(scale: 0.96)))
                         }
+                    }
+                    // A soft scan line sweeps while Octo is reading the frame.
+                    if model.status.hasPrefix("reading") || model.status.hasPrefix("warming") {
+                        Rectangle()
+                            .fill(LinearGradient(colors: [DS.Colors.overlayCursorBlue.opacity(0), DS.Colors.overlayCursorBlue.opacity(0.55), DS.Colors.overlayCursorBlue.opacity(0)], startPoint: .top, endPoint: .bottom))
+                            .frame(width: proxy.size.width, height: 90)
+                            .offset(y: -45 + proxy.size.height * scanPhase)
+                            .onAppear {
+                                withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) { scanPhase = 1 }
+                            }
+                            .allowsHitTesting(false)
                     }
                 }
             }
-            .frame(width: 452, height: 306)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.white.opacity(0.12), lineWidth: 1))
+            .frame(width: previewSize.width, height: previewSize.height)
+            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+
+            // Status pill, top-left; close, top-right. Both float over the picture.
+            HStack(spacing: 7) {
+                Circle()
+                    .fill(Color(red: 0.98, green: 0.3, blue: 0.3))
+                    .frame(width: 7, height: 7)
+                    .shadow(color: Color.red.opacity(0.8), radius: 4)
+                Text(model.status)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 11)
+            .padding(.vertical, 6)
+            .background(Capsule().fill(Color.black.opacity(0.45)).overlay(Capsule().stroke(Color.white.opacity(0.14), lineWidth: 1)))
+            .padding(14)
+
+            HStack {
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(.white.opacity(0.85))
+                        .frame(width: 28, height: 28)
+                        .background(Circle().fill(Color.black.opacity(0.45)).overlay(Circle().stroke(Color.white.opacity(0.14), lineWidth: 1)))
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+                .help("Close camera")
+            }
+            .padding(14)
+            .frame(width: previewSize.width)
         }
-        .padding(14)
-        .frame(width: 480, alignment: .leading)
-        .background(GlassCardBackground(cornerRadius: 20))
+        .frame(width: previewSize.width, height: previewSize.height)
+        .padding(10)
+        .background(GlassCardBackground(cornerRadius: 30))
         .environment(\.colorScheme, .dark)
     }
 }
