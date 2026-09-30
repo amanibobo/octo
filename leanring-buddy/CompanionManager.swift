@@ -14,6 +14,7 @@ import Combine
 import Foundation
 import ScreenCaptureKit
 import SwiftUI
+import NaturalLanguage
 import Vision
 
 enum CompanionVoiceState {
@@ -70,6 +71,8 @@ final class CompanionManager: ObservableObject {
 
     @Published private(set) var isAnalysisServiceReachable = false
     @Published private(set) var isWorkerReachable = false
+    /// The proxy holds a TypeSafe key: Jev decides intents and checks agent steps.
+    @Published private(set) var isJevConfigured = false
     @Published private(set) var lastInteractionReport: SounderInteractionReport?
     /// The last few runs, newest first, for the large card's history.
     @Published private(set) var recentInteractionReports: [SounderInteractionReport] = []
@@ -106,6 +109,8 @@ final class CompanionManager: ObservableObject {
     let drawingLayerModel = DrawingLayerModel()
     /// Clickable paper / image / video card the buddy holds up next to itself.
     private let mediaCardPanelManager = MediaCardPanelManager()
+    /// Fast typed decisions (intent, "did that work", "is this irreversible").
+    private let jevDecisionClient: JevDecisionClient
     /// Top-right card naming the task and ticking off the agent's steps.
     private let agentTaskCardPanelManager = AgentTaskCardPanelManager()
     /// Notes, links and images the user pinned in the notch; folded into every prompt.
@@ -261,6 +266,7 @@ final class CompanionManager: ObservableObject {
             self.chatClient = ClaudeChatClient(workerBaseURL: workerBaseURL, model: SounderConfiguration.chatModel)
         }
         self.analysisClient = AnalysisServiceClient(baseURL: SounderConfiguration.analysisServiceBaseURL)
+        self.jevDecisionClient = JevDecisionClient(workerBaseURL: workerBaseURL)
 
         switch SounderConfiguration.speechOutputProvider {
         case "elevenlabs":
@@ -682,17 +688,21 @@ final class CompanionManager: ObservableObject {
     func refreshServiceHealth() {
         Task {
             isAnalysisServiceReachable = await analysisClient.checkHealth()
-            isWorkerReachable = await Self.probeWorkerHealth()
+            let health = await Self.probeWorkerHealth()
+            isWorkerReachable = health.isReachable
+            isJevConfigured = health.isJevConfigured
+            jevDecisionClient.isConfigured = health.isJevConfigured
         }
     }
 
-    private static func probeWorkerHealth() async -> Bool {
-        guard let url = URL(string: "\(SounderConfiguration.workerBaseURL)/health") else { return false }
+    private static func probeWorkerHealth() async -> (isReachable: Bool, isJevConfigured: Bool) {
+        guard let url = URL(string: "\(SounderConfiguration.workerBaseURL)/health") else { return (false, false) }
         var request = URLRequest(url: url)
         request.timeoutInterval = 3
-        guard let (_, response) = try? await URLSession.shared.data(for: request),
-              let httpResponse = response as? HTTPURLResponse else { return false }
-        return (200...299).contains(httpResponse.statusCode)
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else { return (false, false) }
+        let payload = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        return (true, (payload?["jevConfigured"] as? Bool) ?? false)
     }
 
     // MARK: - Bindings
@@ -899,6 +909,14 @@ final class CompanionManager: ObservableObject {
                 return
             }
             if readAloudScript != nil { endReadAloud() } // anything else ends the reading
+
+            // Jev picks the feature in one typed question. Confident answers route
+            // here; anything else falls through to the phrase matchers below.
+            if try await routeWithJev(transcript: transcript, screenAnalysis: screenAnalysis, report: &report) {
+                finishReport(&report, startedAt: interactionStartedAt)
+                return
+            }
+
             if ReadAloudIntent.startRequested(transcript) {
                 try await startReadAloud(screenAnalysis: screenAnalysis, report: &report)
                 finishReport(&report, startedAt: interactionStartedAt)
@@ -1110,6 +1128,74 @@ final class CompanionManager: ObservableObject {
         let bottomLeft = geometry.globalAppKitPoint(fromCapturePixel: CGPoint(x: box.minX, y: box.maxY))
         let topRight = geometry.globalAppKitPoint(fromCapturePixel: CGPoint(x: box.maxX, y: box.minY))
         return CGRect(x: bottomLeft.x, y: bottomLeft.y, width: topRight.x - bottomLeft.x, height: topRight.y - bottomLeft.y)
+    }
+
+    // MARK: - Jev intent routing
+
+    /// Asks Jev which feature the request is for and runs it. Returns false when
+    /// Jev is unavailable, unsure, or the words lack a parameter the feature needs
+    /// (a language, an export format, the text to type), so the phrase matchers
+    /// decide as before. Mode pins still win: Agent and Rx only run where the
+    /// mode picker allows them.
+    private func routeWithJev(transcript: String, screenAnalysis: ScreenAnalysis, report: inout SounderInteractionReport) async throws -> Bool {
+        let circledRegion = screenAnalysis.regionOfInterestInCapturePixels
+        let clinicalReading = ClinicalModePipeline.scoped(screenAnalysis.clinicalReading, to: circledRegion)
+        guard let decision = await JevIntentRouter.route(
+            transcript: transcript, hasCircledRegion: circledRegion != nil,
+            frontmostAppName: NSWorkspace.shared.frontmostApplication?.localizedName,
+            hasClinicalReading: !clinicalReading.isEmpty, isReadingAloud: false, using: jevDecisionClient
+        ), decision.confidence >= JevIntentRouter.confidenceThreshold else { return false }
+
+        switch decision.intent {
+        case .rewind:
+            guard let request = RewindIntent.detect(transcript) else { return false }
+            try await runRewind(request: request, report: &report)
+        case .readAloud:
+            try await startReadAloud(screenAnalysis: screenAnalysis, report: &report)
+        case .makeReadable:
+            try await runMakeReadable(screenAnalysis: screenAnalysis, report: &report)
+        case .rewrite:
+            guard circledRegion != nil else { return false }
+            let request = RewriteIntent.detect(transcript) ?? RewriteRequest(instruction: "rewrite it to be clearer and better written, keeping the meaning")
+            try await runRewrite(request: request, screenAnalysis: screenAnalysis, report: &report)
+        case .camera:
+            let request = CameraIntent.detect(transcript, hasRegion: circledRegion != nil) ?? .look
+            try await runCamera(request: request, transcript: transcript, report: &report)
+        case .dialogReader:
+            try await runDialogReader(screenAnalysis: screenAnalysis, report: &report)
+        case .translate:
+            let request = TranslateIntent.detect(transcript) ?? TranslateRequest(targetLanguageName: "english", targetLanguage: .english)
+            try await runTranslate(request: request, screenAnalysis: screenAnalysis, report: &report)
+        case .dictate:
+            guard circledRegion != nil, let dictatedText = DictateIntent.text(from: transcript) else { return false }
+            try await runDictate(text: dictatedText, screenAnalysis: screenAnalysis, report: &report)
+        case .inkMath:
+            guard circledRegion != nil, let request = InkMathIntent.detect(transcript) else { return false }
+            try await runInkMath(request: request, screenAnalysis: screenAnalysis, report: &report)
+        case .extract:
+            let request = ExtractIntent.detect(transcript, hasRegion: circledRegion != nil) ?? ExtractRequest(format: .csv)
+            try await runExtract(request: request, screenAnalysis: screenAnalysis, report: &report)
+        case .media:
+            guard let request = ResearchAgent.mediaRequest(in: transcript) else { return false }
+            try await runMediaLookup(request: request, textLines: screenAnalysis.textLines, report: &report)
+        case .agentTask:
+            guard selectedMode == .automatic || selectedMode == .agent else { return false }
+            let rehearsalRequest = Self.rehearsalRequested(in: transcript)
+            if isAgentRehearsalEnabled || rehearsalRequest.wanted {
+                try await rehearseAgentTask(task: rehearsalRequest.task, redirect: nil, previousNotes: nil, screenAnalysis: screenAnalysis, report: &report)
+            } else {
+                try await runAgentMode(task: transcript, firstScreenAnalysis: screenAnalysis, report: &report)
+            }
+        case .clinical:
+            guard selectedMode == .automatic || selectedMode == .clinical, !clinicalReading.isEmpty else { return false }
+            try await runClinicalMode(intent: ClinicalModePipeline.intent(for: transcript), reading: clinicalReading, capture: screenAnalysis.capture,
+                                      regionOfInterest: circledRegion, report: &report, isRerunAfterEdit: false)
+        case .general:
+            guard selectedMode == .automatic || selectedMode == .general else { return false }
+            try await runGeneralMode(transcript: transcript, capture: screenAnalysis.capture, elements: screenAnalysis.elements, textLines: screenAnalysis.textLines,
+                                     regionOfInterest: circledRegion, report: &report)
+        }
+        return true
     }
 
     private func startGuidedRoute(elements: [ScreenElement], labels: [String], geometry: CaptureGeometry) {
@@ -1682,6 +1768,37 @@ final class CompanionManager: ObservableObject {
         try await speak(spokenText)
     }
 
+    // MARK: - Jev checks inside the agent loop
+
+    /// Screen text as Jev sees it: the element list, roles and all, capped.
+    private static func screenTextForJev(_ elements: [ScreenElement]) -> String {
+        elements.prefix(160).map { "[\($0.kind)] \(String($0.text.prefix(80)))" }.joined(separator: "\n")
+    }
+
+    /// Probability that the expected outcome of the last action is visible now.
+    private func jevExpectedOutcomeCheck(expected: String, elements: [ScreenElement]) async -> Double? {
+        guard jevDecisionClient.isConfigured else { return nil }
+        let state = "expected after the last action: \(expected)\n\nscreen text now:\n\(Self.screenTextForJev(elements))"
+        return try? await jevDecisionClient.noul(state: state, instructions: "The expected outcome is visible in the screen text.",
+                                                 whenTrue: "The screen text shows what was expected.", whenFalse: "The screen text does not show it, or shows something else.", timeoutSeconds: 2)
+    }
+
+    /// Probability that the task's claimed result is on screen.
+    private func jevOutcomeCheck(task: String, claim: String, elements: [ScreenElement]) async -> Double? {
+        guard jevDecisionClient.isConfigured else { return nil }
+        let state = "task: \(task)\nclaimed result: \(claim)\n\nscreen text now:\n\(Self.screenTextForJev(elements))"
+        return try? await jevDecisionClient.noul(state: state, instructions: "The screen text proves the task is complete as claimed.",
+                                                 whenTrue: "The result the task asked for is plainly in the screen text.", whenFalse: "The screen text does not show the result, or shows an earlier step.", timeoutSeconds: 2)
+    }
+
+    /// Probability that an action sends, pays, deletes, posts or otherwise cannot be undone.
+    private func jevIrreversibility(of action: AgentAction, appName: String?) async -> Double? {
+        guard jevDecisionClient.isConfigured, [.click, .doubleClick, .pressKeys].contains(action.kind) else { return nil }
+        let state = "app: \(appName ?? "unknown")\naction: \(action.kind.rawValue) \(action.keys ?? "") \(action.text ?? "")\nwhat it does: \(action.narration)\nexpected: \(action.expectedOutcome ?? "")"
+        return try? await jevDecisionClient.noul(state: state, instructions: "This action is outward-facing or irreversible.",
+                                                 whenTrue: "It sends a message or email, posts publicly, pays, purchases, deletes, or submits a form.", whenFalse: "It only navigates, opens, searches, types into a draft, plays media, or changes a view.", timeoutSeconds: 2)
+    }
+
     private static func agentNotes(research: ResearchNotes?, approvedPlan: [AgentPlanStep]?) -> String? {
         var parts: [String] = []
         if let approvedPlan, !approvedPlan.isEmpty {
@@ -1878,7 +1995,15 @@ final class CompanionManager: ObservableObject {
                     agentTaskCardPanelManager.setStatus("checking the result…")
                     try? await Task.sleep(nanoseconds: 900_000_000)
                     let checkAnalysis = try await makeScreenAnalysisTask().value
-                    let verdict = try await agentModePipeline.verifyCompletion(task: task, claimedSummary: action.completionSummary ?? action.narration, capture: checkAnalysis.capture, elements: checkAnalysis.elements)
+                    // Jev reads the fresh screen text first: near-certain either way
+                    // skips the slow vision verifier; anything in between goes to Claude.
+                    let verdict: AgentVerdict
+                    if let quick = await jevOutcomeCheck(task: task, claim: action.completionSummary ?? action.narration, elements: checkAnalysis.elements), quick >= 0.92 || quick <= 0.08 {
+                        verdict = AgentVerdict(isAchieved: quick >= 0.92, evidence: quick >= 0.92 ? "the screen text shows it" : "the screen text does not show it yet", nextHint: nil)
+                        print("⚡️ jev verdict: \(String(format: "%.2f", quick)) (claude verify skipped)")
+                    } else {
+                        verdict = try await agentModePipeline.verifyCompletion(task: task, claimedSummary: action.completionSummary ?? action.narration, capture: checkAnalysis.capture, elements: checkAnalysis.elements)
+                    }
                     print("🔍 verify: \(verdict.isAchieved ? "achieved" : "NOT achieved") — \(verdict.evidence)")
                     if !verdict.isAchieved, stepNumber < AgentModePipeline.maximumSteps {
                         history.append("\(stepNumber). claimed done, but the screen shows: \(verdict.evidence). next: \(verdict.nextHint ?? "keep going")")
@@ -1896,6 +2021,16 @@ final class CompanionManager: ObservableObject {
                 isTaskCardFinished = true
                 history.append("done: \(completionSummary)")
                 break
+            }
+
+            // Brake before anything outward-facing or irreversible: Jev scores the
+            // action; a high score means a caption and a pause the hotkey can interrupt.
+            if let irreversibility = await jevIrreversibility(of: action, appName: NSWorkspace.shared.frontmostApplication?.localizedName), irreversibility >= 0.8 {
+                print("⚡️ jev brake: \(String(format: "%.2f", irreversibility)) for \(action.narration)")
+                presentCaption("about to \(action.narration). this can't be undone — press the hotkey to stop me.")
+                agentTaskCardPanelManager.setStatus("pausing before an irreversible step…")
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                try Task.checkCancellation()
             }
 
             // The card follows along: the plan step the model says it is on, else the
@@ -1946,8 +2081,14 @@ final class CompanionManager: ObservableObject {
             let changed = ScreenHistoryRecorder.meanAbsoluteDifference(fingerprint, previousFingerprint) >= 3
                 || ScreenHistoryRecorder.changedCellFraction(fingerprint, previousFingerprint) >= 0.008
             previousFingerprint = fingerprint
+            // Jev checks whether the expected outcome is in the new screen text; the
+            // history line carries both observations for the next decision.
+            var outcomeNote = ""
+            if let expected = action.expectedOutcome, let likelihood = await jevExpectedOutcomeCheck(expected: expected, elements: screenAnalysis.elements) {
+                outcomeNote = likelihood >= 0.7 ? ", expected outcome visible" : (likelihood <= 0.3 ? ", expected outcome NOT visible" : "")
+            }
             if var last = history.popLast() {
-                last += changed ? " → screen changed" : " → no visible change"
+                last += (changed ? " → screen changed" : " → no visible change") + outcomeNote
                 history.append(last)
             }
             let actionKey = "\(action.kind.rawValue)|\(action.elementID ?? -1)|\(action.text ?? "")|\(action.keys ?? "")|\(action.app ?? "")"

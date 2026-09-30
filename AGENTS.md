@@ -42,6 +42,7 @@ The app never calls external APIs directly. All requests go through a Cloudflare
 | `POST /chat` | `api.fireworks.ai/inference/v1/chat/completions` | OpenAI-compatible chat (vision, JSON schema, streaming passthrough); default model injected |
 | `POST /transcribe` | `audio-turbo.us-virginia-1.direct.fireworks.ai/v1/audio/transcriptions` | Whisper (`whisper-v3-turbo`), multipart passthrough. Note: this host wants the raw key, no `Bearer` |
 | `POST /tts` | `api.elevenlabs.io/v1/text-to-speech/{voiceId}` | Optional ElevenLabs TTS (503 without key) |
+| `POST /jev` | `api.typesafe.ai/v1/systemone` | Optional Jev "System One" decisions: `{state, questions}` → typed probabilities (503 without `TYPESAFE_API_KEY`); `/health` reports `jevConfigured` |
 | `POST /transcribe-token` | `streaming.assemblyai.com/v3/token` | Optional legacy AssemblyAI token (503 without key) |
 | `ANY /analysis/*` | `ANALYSIS_BACKEND_URL` | Optional passthrough to the deployed analysis service |
 
@@ -106,6 +107,8 @@ Worker vars: `FIREWORKS_CHAT_MODEL`, `FIREWORKS_TRANSCRIPTION_MODEL`, `ELEVENLAB
 
 **Grounding by ID**: The LLM never emits pixel coordinates. It receives numbered elements (Set-of-Mark) and returns IDs; Data-mode drawings are built from analysis results (row indices / column names), never from prose.
 
+**Jev decision layer (optional)**: when the proxy has a TypeSafe key, `routeWithJev` asks Jev which feature a request is for (one ~100 ms choice question) and runs it; below 0.6 confidence, on failure, or when the words lack a needed parameter, the phrase matchers decide as before. In the agent loop Jev reads the screen text (never the screenshot) to note whether the expected outcome appeared, to skip the Claude verifier when a claimed result is near-certain either way (≥ 0.92 / ≤ 0.08), and to pause 3 s with a caption before an action it scores ≥ 0.8 irreversible (send, pay, delete, post). Jev is text-only and cannot count or do arithmetic: it never picks elements.
+
 **Agent runs always plan first**: `runAgentMode` asks for a plan (`xhigh`) unless a rehearsal already produced one, shows it on the task card, and passes it to every decide call; each action reports `plan_step` so the card ticks the right row, unplanned actions get a new row. "Screen changed" uses the changed-cell fraction as well as the mean, so a Spotlight-sized window counts.
 
 **Claude call hygiene**: every `completeJSON` passes an `effort` (`xhigh` plan, `high` act/verify, `medium` answers, `low` narration/translation) and enough `max_tokens` that a `max_tokens` stop is treated as an error. Element-id fields get a per-turn `enum` of the ids on screen (`JSONSchemaTools.settingEnum`); nullable enums must be `anyOf` (`nullableEnum`). Tools are **not** `strict`: strict mode compiles a grammar per distinct schema (~2 s, every turn with per-turn enums; measured 14 s per answer). The agent may answer `ask_user` / `cannot_determine` instead of guessing; each history line ends with "screen changed" / "no visible change" and a repeat or two dead actions inject a redirect note.
@@ -127,6 +130,8 @@ Worker vars: `FIREWORKS_CHAT_MODEL`, `FIREWORKS_TRANSCRIPTION_MODEL`, `ELEVENLAB
 | `NotchPanelContentView.swift` | ~210 | Expanded card: status, mode capsule + per-mode description and example, last run, hotkey chips, settings button. |
 | `Notch/NotchIslandView.swift` | ~380 | `NotchSilhouetteShape`, `NotchIslandState`, island view. Collapsed: eyes behind the notch; while listening/thinking/speaking/acting the island grows a 96 pt wing each side (indicator left, word right) since the physical notch hides the middle. |
 | `Notch/NotchSettingsView.swift` | ~430 | Settings page with vertical tabs (Hotkey, Voice, Memory, Buddy, Services, About): hotkey chord, transcription, captions, Octo colour swatches, buddy visibility, clipboard fallback, rehearsal, service status, calibrate. |
+| `Sounder/Backend/JevDecisionClient.swift` | ~95 | Jev via Worker `/jev`: `choice` (option id → criteria, returns choice + probabilities + confidence) and `noul` (probability a statement is true). Short timeouts; `isConfigured` from `/health`. |
+| `Sounder/Router/JevIntentRouter.swift` | ~85 | `OctoIntent` (14 features with Jev criteria) and one choice question over the transcript + context; confidence threshold 0.6. |
 | `Sounder/Overlay/AgentTaskCardPanelManager.swift` | ~300 | Top-right glass card for Agent runs: the task in quotes, the planned steps (pending / active / done / failed), status line and summary. Sized from its content, hidden on the next hotkey. |
 | `Sounder/OctoAppearance.swift` | ~65 | `OctoAccent` presets + `OctoAppearance.shared` (persisted `octoAccentColor`). `DS.Colors.overlayCursorBlue` reads it; every view that paints with it observes the singleton so a new pick repaints at once. |
 | `Notch/SkyLightOperator.swift` | ~75 | Private SkyLight space at max level for the notch window (dlsym, optional). |
