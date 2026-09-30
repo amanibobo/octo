@@ -45,10 +45,6 @@ struct NotchPanelContentView: View {
                     .padding(.horizontal, horizontalPadding)
                     .padding(.vertical, 14)
                 hairline
-                commandSheet
-                    .padding(.horizontal, horizontalPadding)
-                    .padding(.vertical, 14)
-                hairline
                 recentRuns
                     .padding(.horizontal, horizontalPadding)
                     .padding(.vertical, 14)
@@ -207,17 +203,16 @@ struct NotchPanelContentView: View {
     private struct QuickAction: Identifiable {
         let id: String
         let title: String
-        let systemImage: String
         let command: String
     }
 
     private static let quickActionsList: [QuickAction] = [
-        QuickAction(id: "read", title: "Read this to me", systemImage: "text.book.closed", command: "read this to me"),
-        QuickAction(id: "readable", title: "Make readable", systemImage: "list.bullet.rectangle", command: "make this readable"),
-        QuickAction(id: "translate", title: "Translate", systemImage: "character.book.closed", command: "translate this to english"),
-        QuickAction(id: "screen", title: "What's on screen", systemImage: "eye", command: "what's on my screen?"),
-        QuickAction(id: "camera", title: "Camera", systemImage: "camera", command: "camera, what am i holding?"),
-        QuickAction(id: "rewind", title: "Rewind 1 min", systemImage: "backward.fill", command: "what was on my screen a minute ago?"),
+        QuickAction(id: "read", title: "Read this to me", command: "read this to me"),
+        QuickAction(id: "readable", title: "Make readable", command: "make this readable"),
+        QuickAction(id: "translate", title: "Translate", command: "translate this to english"),
+        QuickAction(id: "screen", title: "What's on screen", command: "what's on my screen?"),
+        QuickAction(id: "camera", title: "Camera", command: "camera, what am i holding?"),
+        QuickAction(id: "rewind", title: "Rewind a minute", command: "what was on my screen a minute ago?"),
     ]
 
     private var quickActions: some View {
@@ -232,67 +227,8 @@ struct NotchPanelContentView: View {
             .zIndex(2)
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
                 ForEach(Self.quickActionsList) { action in
-                    Button(action: { companionManager.askByText(action.command) }) {
-                        HStack(spacing: 7) {
-                            Image(systemName: action.systemImage)
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(DS.Colors.overlayCursorBlue)
-                                .frame(width: 16)
-                            Text(action.title)
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(.white.opacity(0.88))
-                                .lineLimit(1)
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .background(
-                            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                .fill(Color.white.opacity(0.06))
-                                .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(Color.white.opacity(0.07), lineWidth: 1))
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .pointerCursor()
-                    .disabled(companionManager.voiceState != .idle)
-                    .opacity(companionManager.voiceState != .idle ? 0.5 : 1)
-                }
-            }
-        }
-    }
-
-    private static let commandSheetList: [(say: String, does: String)] = [
-        ("\u{201C}what does this mean?\u{201D} + circle", "answers about just that area"),
-        ("hold still over a word", "explains it without speaking"),
-        ("\u{201C}copy this table as csv\u{201D} + circle", "clean table on the clipboard"),
-        ("\u{201C}times 1.2\u{201D} + circle a number", "result drawn beside it"),
-        ("\u{201C}clearer\u{201D} + circle a paragraph", "rewrite painted in place"),
-        ("\u{201C}how does this flow?\u{201D}", "numbered arrows across the screen"),
-        ("\u{201C}show me how to …\u{201D}", "a route that lights as you click"),
-        ("\u{201C}rehearse open spotify and …\u{201D}", "ghost run first, then \u{201C}go\u{201D}"),
-    ]
-
-    private var commandSheet: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-                Text("SAY IT")
-                    .font(.system(size: 10, weight: .semibold, design: .rounded))
-                    .foregroundColor(.white.opacity(0.45))
-                    .tracking(0.8)
-                NotchInfoTip(text: "A few phrasings Octo listens for. Any natural wording works; these are the ones that trigger the special drawings.", width: 210)
-            }
-            .zIndex(2)
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)], alignment: .leading, spacing: 7) {
-                ForEach(Array(Self.commandSheetList.enumerated()), id: \.offset) { _, entry in
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(entry.say)
-                            .font(.system(size: 11.5, weight: .medium))
-                            .foregroundColor(.white.opacity(0.85))
-                            .lineLimit(1)
-                        Text(entry.does)
-                            .font(.system(size: 10.5))
-                            .foregroundColor(.white.opacity(0.42))
-                            .lineLimit(1)
+                    QuickActionButton(title: action.title, isEnabled: companionManager.voiceState == .idle) {
+                        companionManager.askByText(action.command)
                     }
                 }
             }
@@ -425,5 +361,44 @@ struct NotchPanelContentView: View {
             .help("Context · notes, links and images Octo keeps in mind")
             NotchIconButton(systemImage: "gearshape", help: "Settings", action: onOpenSettings)
         }
+    }
+}
+
+/// A quiet capsule that brightens on hover and presses down slightly, in the
+/// same glass language as the mode control.
+private struct QuickActionButton: View {
+    let title: String
+    let isEnabled: Bool
+    let action: () -> Void
+    @State private var isHovering = false
+    @State private var isPressed = false
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: 12, weight: .medium, design: .rounded))
+            .foregroundColor(isEnabled ? .white.opacity(isHovering ? 1 : 0.85) : .white.opacity(0.35))
+            .lineLimit(1)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 9)
+            .background(
+                Capsule()
+                    .fill(Color.white.opacity(isHovering && isEnabled ? 0.14 : 0.07))
+                    .overlay(Capsule().stroke(isHovering && isEnabled ? DS.Colors.overlayCursorBlue.opacity(0.55) : Color.white.opacity(0.07), lineWidth: 1))
+                    .shadow(color: DS.Colors.overlayCursorBlue.opacity(isHovering && isEnabled ? 0.25 : 0), radius: 8, y: 2)
+            )
+            .scaleEffect(isPressed ? 0.97 : 1)
+            .contentShape(Capsule())
+            .onHover { isHovering = $0 }
+            .pointerCursor()
+            .animation(.easeOut(duration: 0.16), value: isHovering)
+            .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isPressed)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in if isEnabled { isPressed = true } }
+                    .onEnded { _ in
+                        isPressed = false
+                        if isEnabled { action() }
+                    }
+            )
     }
 }
