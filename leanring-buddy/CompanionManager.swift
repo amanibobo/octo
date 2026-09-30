@@ -1025,7 +1025,7 @@ final class CompanionManager: ObservableObject {
         let frameText = String(match.frame.text.prefix(3500))
         let systemPrompt = "you're octo. the user asked about something that was on their screen earlier. answer from the screen text below only, in one or two spoken sentences, lowercase, quoting the exact relevant line when there is one. start with how long ago it was. never invent text that is not in the frame."
         let userText = "this frame is from \(ageText).\nmatched lines: \(matchedLines.isEmpty ? "(none)" : matchedLines.joined(separator: " | "))\n\nfull screen text:\n\(frameText)\n\nuser asked: \"\(report.transcript)\""
-        if let answer = try? await chatClient.completeText(systemPrompt: systemPrompt, userText: userText, maxTokens: 160, timeoutSeconds: 10),
+        if let answer = try? await chatClient.completeText(systemPrompt: systemPrompt, userText: userText, maxTokens: 500, timeoutSeconds: 15, effort: "low"),
            !answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             spokenText = answer.trimmingCharacters(in: .whitespacesAndNewlines)
         }
@@ -1795,6 +1795,10 @@ final class CompanionManager: ObservableObject {
         var history: [String] = []
         var completionSummary = "i ran out of steps before finishing that."
         var verificationAttempts = 0
+        var previousFingerprint = ScreenHistoryRecorder.signature(of: firstScreenAnalysis.capture.cgImage)
+        var lastActionKey = ""
+        var repeatCount = 0
+        var noChangeStreak = 0
         for stepNumber in 1...AgentModePipeline.maximumSteps {
             try Task.checkCancellation()
             let decisionStartedAt = Date()
@@ -1806,6 +1810,13 @@ final class CompanionManager: ObservableObject {
             report.planSeconds += Date().timeIntervalSince(decisionStartedAt)
             try Task.checkCancellation()
             print("🤖 step \(stepNumber): \(action.kind.rawValue) \(action.elementID.map { "[\($0)]" } ?? "") \(action.text ?? action.app ?? action.keys ?? "") — \(action.narration)")
+
+            if action.kind == .askUser || action.kind == .cannotDetermine {
+                // The way out: no guessing. The question or reason is spoken and the loop ends.
+                completionSummary = action.text ?? action.narration
+                history.append("\(stepNumber). \(action.kind.rawValue): \(completionSummary)")
+                break
+            }
 
             if action.kind == .done || action.isTaskComplete {
                 // Trust, but verify: a fresh screenshot must show the outcome before
@@ -1862,6 +1873,26 @@ final class CompanionManager: ObservableObject {
             drawingLayerModel.clearImmediately()
             try? await Task.sleep(nanoseconds: 40_000_000)
             screenAnalysis = try await makeScreenAnalysisTask().value
+
+            // Observe after every action: did the screen change? The answer goes on
+            // the history line, and repeats or dead actions trigger a loop breaker.
+            let fingerprint = ScreenHistoryRecorder.signature(of: screenAnalysis.capture.cgImage)
+            let changed = ScreenHistoryRecorder.meanAbsoluteDifference(fingerprint, previousFingerprint) >= 3
+            previousFingerprint = fingerprint
+            if var last = history.popLast() {
+                last += changed ? " → screen changed" : " → no visible change"
+                history.append(last)
+            }
+            let actionKey = "\(action.kind.rawValue)|\(action.elementID ?? -1)|\(action.text ?? "")|\(action.keys ?? "")|\(action.app ?? "")"
+            repeatCount = actionKey == lastActionKey ? repeatCount + 1 : 0
+            lastActionKey = actionKey
+            noChangeStreak = changed ? 0 : noChangeStreak + 1
+            if repeatCount >= 1 || noChangeStreak >= 2 {
+                history.append("note: the last actions repeated or had no visible effect. state what you expected to happen and what you observe, then choose a different approach, or ask_user.")
+                print("🔁 loop breaker (repeat \(repeatCount), no-change streak \(noChangeStreak))")
+                repeatCount = 0
+                noChangeStreak = 0
+            }
         }
 
         report.metricText = "\(history.count) actions\(researchNotes == nil ? "" : " · researched")"

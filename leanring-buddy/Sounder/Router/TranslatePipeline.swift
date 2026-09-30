@@ -81,8 +81,9 @@ final class TranslatePipeline {
             images: [],
             priorTurns: [],
             jsonSchema: Self.schema,
-            maxTokens: 2000,
-            timeoutSeconds: 25
+            maxTokens: 4000,
+            timeoutSeconds: 35,
+            effort: "low"
         )
         var result: [Int: String] = [:]
         for entry in (object["translations"] as? [[String: Any]]) ?? [] {

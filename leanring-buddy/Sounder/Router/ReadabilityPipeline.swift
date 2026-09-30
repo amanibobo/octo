@@ -58,8 +58,9 @@ final class ReadabilityPipeline {
             images: [],
             priorTurns: [],
             jsonSchema: Self.structureSchema,
-            maxTokens: 900,
-            timeoutSeconds: 25
+            maxTokens: 1800,
+            timeoutSeconds: 30,
+            effort: "medium"
         )
         let valid = { (index: Int) -> Bool in index >= 0 && index < lines.count }
         let definitions = ((object["definitions"] as? [[String: Any]]) ?? []).compactMap { entry -> ReadableStructure.Definition? in
@@ -92,8 +93,9 @@ final class ReadabilityPipeline {
             images: [],
             priorTurns: [],
             jsonSchema: Self.rewriteSchema,
-            maxTokens: 1200,
-            timeoutSeconds: 25
+            maxTokens: 2400,
+            timeoutSeconds: 30,
+            effort: "medium"
         )
         let segments = ((object["segments"] as? [[String: Any]]) ?? []).compactMap { entry -> RewriteResult.Segment? in
             guard let text = entry["text"] as? String else { return nil }

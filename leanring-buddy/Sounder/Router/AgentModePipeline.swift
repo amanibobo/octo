@@ -26,6 +26,9 @@ struct AgentAction {
         case scroll
         case wait
         case done
+        /// The way out: a question for the user, or a plain statement that the task cannot be done.
+        case askUser = "ask_user"
+        case cannotDetermine = "cannot_determine"
     }
     let kind: Kind
     let elementID: Int?
@@ -91,7 +94,11 @@ final class AgentModePipeline {
 
     elements marked with a role (button, textfield, link, menuitem, row, popup, checkbox) come from the accessibility tree: their labels and positions are exact and clicking them always lands. plain "text" elements come from ocr and are approximate. prefer the accessibility element when both describe the same thing.
 
-    actions: open_app (app name), open_url (a url or url scheme, e.g. spotify:search:matches che), click (element_id), double_click (element_id), type (text; only after a text field is focused, or with element_id of a textfield to focus it first), press_keys (a combo like cmd+l, enter, escape, space, down), scroll (element_id near where to scroll, scroll_lines negative = down), wait (let the ui settle), done (task complete or impossible; give completion_summary).
+    actions: open_app (app name), open_url (a url or url scheme, e.g. spotify:search:matches che), click (element_id), double_click (element_id), type (text; only after a text field is focused, or with element_id of a textfield to focus it first), press_keys (a combo like cmd+l, enter, escape, space, down), scroll (element_id near where to scroll, scroll_lines negative = down), wait (let the ui settle), done (the screenshot already shows the result; give completion_summary), ask_user (text = one short question, when the task is ambiguous or needs a choice only the user can make; the loop ends and the question is spoken), cannot_determine (text = one short reason, when the task cannot be done from this screen; better than guessing).
+
+    each history line ends with what the screen did after the action: "screen changed" or "no visible change". when the last actions had no visible change, or the same action repeats, state in expected_outcome what you expected versus what you see and pick a different approach, or ask_user.
+
+    example of a good sequence for "open notes and write buy milk": step 1 open_app "Notes" (expected: notes window in front) → screen changed. step 2 press_keys cmd+n (expected: an empty note) → screen changed. step 3 type "buy milk" with element_id of the note body textfield (expected: the words appear in the note) → screen changed. step 4 done, completion_summary "buy milk is in a new note". example of a good way out: the task says "send it to sarah" and two contacts are named sarah → ask_user "which sarah, sarah kim or sarah lopez?".
 
     rules: one action per turn. never say done on hope: done means the screenshot already shows the result (the song title in the now-playing bar, the page loaded, the message sent). if the evidence is not on screen yet, take the next action instead. before each action fill expected_outcome with what the next screenshot should show if it worked; if the last expected outcome did not appear, do something different rather than repeating. prefer app search fields and enter over clicking many things. never enter passwords or payment details; if a login or payment screen appears, return done and say so. only use element ids from the list. narration is a short lowercase phrase shown to the user while you act, e.g. "opening spotify", "typing the song name", "clicking the first result". if research notes are provided, follow them.
 
@@ -101,7 +108,7 @@ final class AgentModePipeline {
     private static let actionSchema: [String: Any] = [
         "type": "object",
         "properties": [
-            "action": ["type": "string", "enum": ["open_app", "open_url", "click", "double_click", "type", "press_keys", "scroll", "wait", "done"]],
+            "action": ["type": "string", "enum": ["open_app", "open_url", "click", "double_click", "type", "press_keys", "scroll", "wait", "done", "ask_user", "cannot_determine"]],
             "element_id": ["type": ["integer", "null"]],
             "text": ["type": ["string", "null"]],
             "app": ["type": ["string", "null"]],
@@ -136,7 +143,7 @@ final class AgentModePipeline {
         let object = try await chatClient.completeJSON(
             systemPrompt: "you are a strict verifier. given a task, an agent's claim that it is done, and the current screenshot with its elements, decide whether the screen itself proves the task is complete. be concrete: for \"play X\" the now-playing bar must show X (not a different track, not just search results); for \"open Y\" Y must be the frontmost window; for \"send\" the message must appear as sent. evidence is one sentence describing exactly what you see. if not achieved, next_hint is one concrete next action.",
             userText: "task: \"\(task)\"\nagent claims: \"\(claimedSummary)\"\nfrontmost app: \(MacControl.frontmostApplicationName())\n\nelements on screen:\n\(elementListText)",
-            images: images, priorTurns: [], jsonSchema: Self.verdictSchema, maxTokens: 250, timeoutSeconds: 25)
+            images: images, priorTurns: [], jsonSchema: Self.verdictSchema, maxTokens: 800, timeoutSeconds: 30, effort: "high")
         return AgentVerdict(isAchieved: (object["achieved"] as? Bool) ?? false,
                             evidence: (object["evidence"] as? String) ?? "no evidence",
                             nextHint: object["next_hint"] as? String)
@@ -173,7 +180,7 @@ final class AgentModePipeline {
         userText += "\nelements on screen (id → role: text):\n\(elementListText.isEmpty ? "(no text detected)" : elementListText)"
         let object = try await chatClient.completeJSON(
             systemPrompt: "you are octo, planning how to carry out a spoken task on the user's mac before doing anything. write the whole plan as 2 to 8 concrete steps in order. for each step: action (open_app, open_url, click, double_click, type, press_keys, scroll, wait), element_id only when the target is visible on the current screen (from the numbered list), detail (the app name, url, text to type, or key combo), a 3-8 word description shown to the user, and expected_outcome. later steps that depend on a screen not visible yet have element_id null and describe the target in words. prefer urls and search fields over many clicks. spoken_summary: one lowercase sentence, e.g. \"three steps: open spotify, search for the song, press play.\"" + " " + Self.systemPrompt.components(separatedBy: "spotify playbook:").dropFirst().map { "spotify playbook:" + $0 }.joined(),
-            userText: userText, images: images, priorTurns: [], jsonSchema: Self.planSchema, maxTokens: 900, timeoutSeconds: 30)
+            userText: userText, images: images, priorTurns: [], jsonSchema: Self.planSchema, maxTokens: 2500, timeoutSeconds: 45, effort: "xhigh")
         let steps = ((object["steps"] as? [[String: Any]]) ?? []).enumerated().compactMap { index, entry -> AgentPlanStep? in
             guard let action = entry["action"] as? String, let description = entry["description"] as? String else { return nil }
             return AgentPlanStep(number: index + 1, action: action, elementID: entry["element_id"] as? Int, detail: entry["detail"] as? String,
@@ -213,8 +220,10 @@ final class AgentModePipeline {
         elements on screen (id → text):
         \(elementListText.isEmpty ? "(no text detected)" : elementListText)
         """
+        let validIDs: [Any] = groundingElements.map(\.id) + [NSNull()]
+        let turnSchema = JSONSchemaTools.settingEnum(Self.actionSchema, atPath: ["element_id"], values: validIDs)
         let object = try await chatClient.completeJSON(systemPrompt: Self.systemPrompt, userText: userText, images: images,
-                                                       priorTurns: [], jsonSchema: Self.actionSchema, maxTokens: 400, timeoutSeconds: 30)
+                                                       priorTurns: [], jsonSchema: turnSchema, maxTokens: 1600, timeoutSeconds: 40, effort: "high")
         let kind = AgentAction.Kind(rawValue: (object["action"] as? String) ?? "wait") ?? .wait
         return AgentAction(
             kind: kind,
@@ -278,6 +287,10 @@ final class AgentModePipeline {
             return "wait"
         case .done:
             return "done: \(action.completionSummary ?? "")"
+        case .askUser:
+            return "ask_user: \(action.text ?? action.narration)"
+        case .cannotDetermine:
+            return "cannot_determine: \(action.text ?? action.narration)"
         }
     }
 
@@ -288,7 +301,7 @@ final class AgentModePipeline {
         case .type, .pressKeys: return 900_000_000
         case .click, .doubleClick, .scroll: return 1_100_000_000
         case .wait: return 1_500_000_000
-        case .done: return 0
+        case .done, .askUser, .cannotDetermine: return 0
         }
     }
 }

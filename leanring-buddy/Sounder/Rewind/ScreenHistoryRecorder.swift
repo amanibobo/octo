@@ -158,7 +158,7 @@ final class ScreenHistoryRecorder: ObservableObject {
     }
 
     /// 32×18 grayscale fingerprint for cheap change detection.
-    nonisolated private static func signature(of image: CGImage) -> [UInt8] {
+    nonisolated static func signature(of image: CGImage) -> [UInt8] {
         let width = 32, height = 18
         var pixels = [UInt8](repeating: 0, count: width * height)
         guard let context = CGContext(data: &pixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width,
@@ -168,7 +168,7 @@ final class ScreenHistoryRecorder: ObservableObject {
         return pixels
     }
 
-    nonisolated private static func meanAbsoluteDifference(_ a: [UInt8], _ b: [UInt8]) -> Double {
+    nonisolated static func meanAbsoluteDifference(_ a: [UInt8], _ b: [UInt8]) -> Double {
         guard a.count == b.count, !a.isEmpty else { return .infinity }
         var total = 0
         for index in 0..<a.count { total += abs(Int(a[index]) - Int(b[index])) }

@@ -56,8 +56,9 @@ final class GeneralModePipeline {
             images: [ChatModelImage(data: frameJPEG, mimeType: "image/jpeg")] + (userContext?.images ?? []),
             priorTurns: [],
             jsonSchema: Self.cameraAnswerSchema,
-            maxTokens: 500,
-            timeoutSeconds: 25
+            maxTokens: 1200,
+            timeoutSeconds: 30,
+            effort: "medium"
         )
         let spoken = ((object["speak"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let indices = ((object["key_line_indices"] as? [Int]) ?? []).filter { $0 >= 0 && $0 < textLines.count }
@@ -72,6 +73,8 @@ final class GeneralModePipeline {
     you're octo, a friendly companion that lives in the user's menu bar. the user just spoke to you via push-to-talk and you can see their screen. your reply is spoken aloud, so write the way you'd talk: one or two short sentences, all lowercase, casual, no lists, no markdown, no emojis. spell out small numbers. never say "simply" or "just". if they ask for more detail, go deeper.
 
     the first image is the screen. any further images are references the user pinned as context, not the screen; never point at things in them.
+
+    example of a good turn. elements: [3] text: Total due $1,240.00 · [4] text: Pay now · [5] button: Pay now. user said: "where do i pay this?" → speak: "the pay now button, just under the total." point_element_id: 5, point_quote: "Pay now", highlights: [{element_id: 3, quote: "$1,240.00"}]. nothing else lit.
 
     grounding rules, strictly: highlight only the exact thing the user asked about, and nothing next to it "for context". each highlight names an element id and quotes, verbatim from the element list, the words to light up: quote just the phrase when the user asked about a word or phrase (the app lights only those words), quote the whole element text only when the whole line is the answer. a highlight whose quote is not in that element's text is discarded, so never guess. when the user circled a region, only elements inside it exist: answer about those and never highlight or point outside. if nothing on screen matches what was asked, say so and highlight nothing rather than the nearest thing. point_element_id and point_quote follow the same rule.
 
@@ -203,13 +206,20 @@ final class GeneralModePipeline {
         user said: "\(transcript)"
         """
 
+        // Only this turn's element ids are valid: the schema enum makes an unlisted id impossible.
+        let validIDs: [Any] = groundingElements.map(\.id)
+        var turnSchema = JSONSchemaTools.settingEnum(Self.answerSchema, atPath: ["point_element_id"], values: validIDs + [NSNull()])
+        turnSchema = JSONSchemaTools.settingEnum(turnSchema, atPath: ["highlights", "items", "element_id"], values: validIDs)
+        turnSchema = JSONSchemaTools.settingEnum(turnSchema, atPath: ["route_element_ids", "items"], values: validIDs)
         let responseObject = try await chatClient.completeJSON(
             systemPrompt: Self.systemPrompt,
             userText: userText,
             images: images,
             priorTurns: conversationHistory,
-            jsonSchema: Self.answerSchema,
-            maxTokens: 900
+            jsonSchema: turnSchema,
+            maxTokens: 2000,
+            timeoutSeconds: 35,
+            effort: "medium"
         )
 
         let spokenText = (responseObject["speak"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

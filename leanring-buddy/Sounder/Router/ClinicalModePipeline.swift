@@ -177,7 +177,7 @@ final class ClinicalModePipeline {
         print("🔒 outbound narration: \(reading.medications.count) drug concepts, \(findings.findings.count) findings, 0 raw chart words")
 
         do {
-            let answer = try await chatClient.completeText(systemPrompt: systemPrompt, userText: userText, maxTokens: 300, timeoutSeconds: 12)
+            let answer = try await chatClient.completeText(systemPrompt: systemPrompt, userText: userText, maxTokens: 700, timeoutSeconds: 15, effort: "low")
             let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
             guard !trimmed.isEmpty else { return findings.summaryText }
             // Every number the findings mention must survive verbatim if it is spoken at all;

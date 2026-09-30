@@ -53,8 +53,9 @@ final class WhiteboardPipeline {
             images: [],
             priorTurns: [],
             jsonSchema: Self.schema,
-            maxTokens: 500,
-            timeoutSeconds: 15
+            maxTokens: 1200,
+            timeoutSeconds: 25,
+            effort: "medium"
         )
         let nodes = ((object["nodes"] as? [[String: Any]]) ?? []).compactMap { node -> WhiteboardDiagram.Node? in
             guard let id = node["id"] as? String, let label = node["label"] as? String, !label.isEmpty else { return nil }

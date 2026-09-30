@@ -22,7 +22,8 @@ struct ChatModelPriorTurn {
 protocol ChatModelClient: AnyObject {
     var displayName: String { get }
 
-    /// Returns a JSON object matching `jsonSchema`.
+    /// Returns a JSON object matching `jsonSchema`. `effort` is the model's
+    /// reasoning effort ("low" … "xhigh"); nil leaves the provider default.
     func completeJSON(
         systemPrompt: String,
         userText: String,
@@ -30,14 +31,16 @@ protocol ChatModelClient: AnyObject {
         priorTurns: [ChatModelPriorTurn],
         jsonSchema: [String: Any],
         maxTokens: Int,
-        timeoutSeconds: TimeInterval
+        timeoutSeconds: TimeInterval,
+        effort: String?
     ) async throws -> [String: Any]
 
     func completeText(
         systemPrompt: String,
         userText: String,
         maxTokens: Int,
-        timeoutSeconds: TimeInterval
+        timeoutSeconds: TimeInterval,
+        effort: String?
     ) async throws -> String
 }
 
@@ -48,14 +51,59 @@ extension ChatModelClient {
         images: [ChatModelImage] = [],
         priorTurns: [ChatModelPriorTurn] = [],
         jsonSchema: [String: Any],
-        maxTokens: Int = 700,
-        timeoutSeconds: TimeInterval = 25
+        maxTokens: Int = 1200,
+        timeoutSeconds: TimeInterval = 30,
+        effort: String? = nil
     ) async throws -> [String: Any] {
         try await completeJSON(systemPrompt: systemPrompt, userText: userText, images: images, priorTurns: priorTurns,
-                               jsonSchema: jsonSchema, maxTokens: maxTokens, timeoutSeconds: timeoutSeconds)
+                               jsonSchema: jsonSchema, maxTokens: maxTokens, timeoutSeconds: timeoutSeconds, effort: effort)
     }
 
-    func completeText(systemPrompt: String, userText: String, maxTokens: Int = 400, timeoutSeconds: TimeInterval = 12) async throws -> String {
-        try await completeText(systemPrompt: systemPrompt, userText: userText, maxTokens: maxTokens, timeoutSeconds: timeoutSeconds)
+    func completeText(systemPrompt: String, userText: String, maxTokens: Int = 600, timeoutSeconds: TimeInterval = 15, effort: String? = nil) async throws -> String {
+        try await completeText(systemPrompt: systemPrompt, userText: userText, maxTokens: maxTokens, timeoutSeconds: timeoutSeconds, effort: effort)
+    }
+}
+
+/// Small JSON-schema utilities for strict, per-turn tool schemas.
+enum JSONSchemaTools {
+    /// Makes every object in the schema strict: `additionalProperties: false` and
+    /// every property required (nullable properties stay nullable). Required by
+    /// the API's strict tool mode, which then guarantees the input validates.
+    static func strict(_ schema: [String: Any]) -> [String: Any] {
+        var result = schema
+        if let type = schema["type"] as? String, type == "object" {
+            result["additionalProperties"] = false
+            if let properties = schema["properties"] as? [String: Any] {
+                var strictProperties: [String: Any] = [:]
+                for (key, value) in properties {
+                    strictProperties[key] = (value as? [String: Any]).map(strict) ?? value
+                }
+                result["properties"] = strictProperties
+                result["required"] = Array(properties.keys).sorted()
+            }
+        }
+        if let items = schema["items"] as? [String: Any] {
+            result["items"] = strict(items)
+        }
+        return result
+    }
+
+    /// Returns a copy with `enum: values` set on the schema at `path` (property
+    /// names, with "items" for array elements). Used to allow only the element ids
+    /// that exist on this turn, so an unlisted id cannot be emitted at all.
+    static func settingEnum(_ schema: [String: Any], atPath path: [String], values: [Any]) -> [String: Any] {
+        guard let first = path.first else {
+            var leaf = schema
+            leaf["enum"] = values
+            return leaf
+        }
+        var result = schema
+        if first == "items", let items = schema["items"] as? [String: Any] {
+            result["items"] = settingEnum(items, atPath: Array(path.dropFirst()), values: values)
+        } else if var properties = schema["properties"] as? [String: Any], let child = properties[first] as? [String: Any] {
+            properties[first] = settingEnum(child, atPath: Array(path.dropFirst()), values: values)
+            result["properties"] = properties
+        }
+        return result
     }
 }

@@ -43,13 +43,17 @@ final class ClaudeChatClient: ChatModelClient {
         priorTurns: [ChatModelPriorTurn],
         jsonSchema: [String: Any],
         maxTokens: Int,
-        timeoutSeconds: TimeInterval
+        timeoutSeconds: TimeInterval,
+        effort: String?
     ) async throws -> [String: Any] {
-        var requestBody = baseRequestBody(systemPrompt: systemPrompt, userText: userText, images: images, priorTurns: priorTurns, maxTokens: maxTokens)
+        var requestBody = baseRequestBody(systemPrompt: systemPrompt, userText: userText, images: images, priorTurns: priorTurns, maxTokens: maxTokens, effort: effort)
+        // Strict mode: the input is guaranteed to validate against the schema, so
+        // an id outside a per-turn enum or a missing field cannot come back.
         requestBody["tools"] = [[
             "name": "answer",
-            "description": "Return the structured answer.",
-            "input_schema": jsonSchema
+            "description": "Return the structured answer. Call this exactly once with the complete answer.",
+            "strict": true,
+            "input_schema": JSONSchemaTools.strict(jsonSchema)
         ]]
         requestBody["tool_choice"] = ["type": "tool", "name": "answer"]
 
@@ -61,8 +65,8 @@ final class ClaudeChatClient: ChatModelClient {
         return input
     }
 
-    func completeText(systemPrompt: String, userText: String, maxTokens: Int, timeoutSeconds: TimeInterval) async throws -> String {
-        let requestBody = baseRequestBody(systemPrompt: systemPrompt, userText: userText, images: [], priorTurns: [], maxTokens: maxTokens)
+    func completeText(systemPrompt: String, userText: String, maxTokens: Int, timeoutSeconds: TimeInterval, effort: String?) async throws -> String {
+        let requestBody = baseRequestBody(systemPrompt: systemPrompt, userText: userText, images: [], priorTurns: [], maxTokens: maxTokens, effort: effort)
         let contentBlocks = try await send(requestBody, timeoutSeconds: timeoutSeconds)
         let text = contentBlocks.compactMap { block -> String? in
             (block["type"] as? String) == "text" ? block["text"] as? String : nil
@@ -73,7 +77,7 @@ final class ClaudeChatClient: ChatModelClient {
 
     // MARK: - Private
 
-    private func baseRequestBody(systemPrompt: String, userText: String, images: [ChatModelImage], priorTurns: [ChatModelPriorTurn], maxTokens: Int) -> [String: Any] {
+    private func baseRequestBody(systemPrompt: String, userText: String, images: [ChatModelImage], priorTurns: [ChatModelPriorTurn], maxTokens: Int, effort: String?) -> [String: Any] {
         var messages: [[String: Any]] = []
         for turn in priorTurns {
             messages.append(["role": "user", "content": turn.userText])
@@ -92,6 +96,9 @@ final class ClaudeChatClient: ChatModelClient {
             "messages": messages
         ]
         if let model { body["model"] = model }
+        // Effort steers adaptive thinking (on by default on this model); no
+        // temperature, no budget_tokens: both are rejected on Sonnet 5.
+        if let effort { body["output_config"] = ["effort": effort] }
         return body
     }
 
@@ -115,7 +122,16 @@ final class ClaudeChatClient: ChatModelClient {
               let contentBlocks = payload["content"] as? [[String: Any]] else {
             throw ClaudeChatError(message: "claude response had no content")
         }
-        print("🧠 Claude: \(String(format: "%.2f", Date().timeIntervalSince(startedAt)))s")
+        let stopReason = payload["stop_reason"] as? String ?? "?"
+        let usage = payload["usage"] as? [String: Any]
+        let outputTokens = usage?["output_tokens"] as? Int ?? 0
+        let effortText = (requestBody["output_config"] as? [String: Any])?["effort"] as? String ?? "default"
+        print("🧠 Claude: \(String(format: "%.2f", Date().timeIntervalSince(startedAt)))s · \(outputTokens) out · effort \(effortText) · stop \(stopReason)")
+        if stopReason == "max_tokens" {
+            // A truncated answer is the classic "stuck" symptom: the budget ran out mid-thought.
+            print("⚠️ Claude hit max_tokens (\(requestBody["max_tokens"] ?? 0)); raise the budget for this call")
+            throw ClaudeChatError(message: "claude ran out of output tokens; try again")
+        }
         return contentBlocks
     }
 }
