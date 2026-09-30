@@ -168,6 +168,15 @@ final class ScreenHistoryRecorder: ObservableObject {
         return pixels
     }
 
+    /// Share of grid cells that changed clearly. A small window such as Spotlight
+    /// moves only a few cells, which the screen-wide mean would miss.
+    nonisolated static func changedCellFraction(_ a: [UInt8], _ b: [UInt8], threshold: Int = 16) -> Double {
+        guard a.count == b.count, !a.isEmpty else { return 1 }
+        var changed = 0
+        for index in 0..<a.count where abs(Int(a[index]) - Int(b[index])) >= threshold { changed += 1 }
+        return Double(changed) / Double(a.count)
+    }
+
     nonisolated static func meanAbsoluteDifference(_ a: [UInt8], _ b: [UInt8]) -> Double {
         guard a.count == b.count, !a.isEmpty else { return .infinity }
         var total = 0

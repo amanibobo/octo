@@ -37,6 +37,8 @@ struct AgentAction {
     let keys: String?
     let scrollLines: Int?
     let narration: String
+    /// Which step of the given plan this action carries out (1-based), for the task card.
+    let planStep: Int?
     let isTaskComplete: Bool
     let completionSummary: String?
     /// What the screen should show once this step has worked (kept in history).
@@ -96,6 +98,8 @@ final class AgentModePipeline {
 
     actions: open_app (app name), open_url (a url or url scheme, e.g. spotify:search:matches che), click (element_id), double_click (element_id), type (text; only after a text field is focused, or with element_id of a textfield to focus it first), press_keys (a combo like cmd+l, enter, escape, space, down), scroll (element_id near where to scroll, scroll_lines negative = down), wait (let the ui settle), done (the screenshot already shows the result; give completion_summary), ask_user (text = one short question, when the task is ambiguous or needs a choice only the user can make; the loop ends and the question is spoken), cannot_determine (text = one short reason, when the task cannot be done from this screen; better than guessing).
 
+    plan_step: when a numbered plan is given, the number of the plan step this action carries out (several actions may share a step; null when the action is not part of the plan, or when there is no plan).
+
     each history line ends with what the screen did after the action: "screen changed" or "no visible change". when the last actions had no visible change, or the same action repeats, state in expected_outcome what you expected versus what you see and pick a different approach, or ask_user.
 
     example of a good sequence for "open notes and write buy milk": step 1 open_app "Notes" (expected: notes window in front) → screen changed. step 2 press_keys cmd+n (expected: an empty note) → screen changed. step 3 type "buy milk" with element_id of the note body textfield (expected: the words appear in the note) → screen changed. step 4 done, completion_summary "buy milk is in a new note". example of a good way out: the task says "send it to sarah" and two contacts are named sarah → ask_user "which sarah, sarah kim or sarah lopez?".
@@ -115,11 +119,12 @@ final class AgentModePipeline {
             "keys": ["type": ["string", "null"]],
             "scroll_lines": ["type": ["integer", "null"]],
             "narration": ["type": "string"],
+            "plan_step": ["type": ["integer", "null"]],
             "task_complete": ["type": "boolean"],
             "completion_summary": ["type": ["string", "null"]],
             "expected_outcome": ["type": ["string", "null"]]
         ],
-        "required": ["action", "element_id", "text", "app", "keys", "scroll_lines", "narration", "task_complete", "completion_summary", "expected_outcome"]
+        "required": ["action", "element_id", "text", "app", "keys", "scroll_lines", "narration", "plan_step", "task_complete", "completion_summary", "expected_outcome"]
     ]
 
     private static let verdictSchema: [String: Any] = [
@@ -233,6 +238,7 @@ final class AgentModePipeline {
             keys: object["keys"] as? String,
             scrollLines: object["scroll_lines"] as? Int,
             narration: (object["narration"] as? String) ?? kind.rawValue,
+            planStep: object["plan_step"] as? Int,
             isTaskComplete: (object["task_complete"] as? Bool) ?? (kind == .done),
             completionSummary: object["completion_summary"] as? String,
             expectedOutcome: object["expected_outcome"] as? String

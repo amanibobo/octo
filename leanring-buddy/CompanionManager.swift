@@ -106,6 +106,8 @@ final class CompanionManager: ObservableObject {
     let drawingLayerModel = DrawingLayerModel()
     /// Clickable paper / image / video card the buddy holds up next to itself.
     private let mediaCardPanelManager = MediaCardPanelManager()
+    /// Top-right card naming the task and ticking off the agent's steps.
+    private let agentTaskCardPanelManager = AgentTaskCardPanelManager()
     /// Notes, links and images the user pinned in the notch; folded into every prompt.
     let userContextStore = UserContextStore()
     /// Rolling in-memory buffer of low-res frames + OCR for "what did that say five minutes ago?".
@@ -626,6 +628,7 @@ final class CompanionManager: ObservableObject {
         mediaCardPanelManager.hide()
         rewindPanelManager.hide()
         whiteboardPanelManager.hide()
+        agentTaskCardPanelManager.hide()
         endGuidedRoute()
         drawingLayerModel.clear()
         lastTranscript = trimmed
@@ -656,6 +659,7 @@ final class CompanionManager: ObservableObject {
                 self.mediaCardPanelManager.hide()
                 self.rewindPanelManager.hide()
                 self.whiteboardPanelManager.hide()
+                self.agentTaskCardPanelManager.hide()
                 self.endGuidedRoute()
                 self.drawingLayerModel.clear()
                 self.lastTranscript = trimmed
@@ -1681,7 +1685,7 @@ final class CompanionManager: ObservableObject {
     private static func agentNotes(research: ResearchNotes?, approvedPlan: [AgentPlanStep]?) -> String? {
         var parts: [String] = []
         if let approvedPlan, !approvedPlan.isEmpty {
-            parts.append("the user watched and approved this plan; follow it step by step, adapting only if the screen differs:\n" + approvedPlan.map(\.promptLine).joined(separator: "\n"))
+            parts.append("follow this plan step by step, adapting only if the screen differs; report the step you are on in plan_step:\n" + approvedPlan.map(\.promptLine).joined(separator: "\n"))
         }
         if let research { parts.append(research.asPromptText) }
         return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
@@ -1702,15 +1706,19 @@ final class CompanionManager: ObservableObject {
             researchNotes = try? await researchAgent.research(task: task)
         }
         presentCaption("planning…")
+        agentTaskCardPanelManager.show(task: task)
         let planStartedAt = Date()
         let plan = try await agentModePipeline.plan(task: task, researchNotes: researchNotes?.asPromptText, userContextText: userContextForCurrentInteraction?.promptText,
                                                      redirect: redirect, capture: screenAnalysis.capture, elements: screenAnalysis.elements)
         report.planSeconds = Date().timeIntervalSince(planStartedAt)
         try Task.checkCancellation()
         guard !plan.steps.isEmpty else {
+            agentTaskCardPanelManager.finish(summary: "couldn't work out a plan", succeeded: false)
             try await speak("i couldn't work out a plan for that.")
             return
         }
+        agentTaskCardPanelManager.setPlan(plan.steps.map(\.description))
+        agentTaskCardPanelManager.setStatus("rehearsing · say \u{201C}go\u{201D} to run, or tell me what to change")
         print("🎬 rehearsal: \(plan.steps.count) steps\n  " + plan.steps.map(\.promptLine).joined(separator: "\n  "))
 
         // Numbered route over the steps that target something visible now.
@@ -1758,6 +1766,7 @@ final class CompanionManager: ObservableObject {
     }
 
     private func clearRehearsal() {
+        agentTaskCardPanelManager.hide()
         rehearsalTimeoutTask?.cancel()
         rehearsalTimeoutTask = nil
         pendingRehearsal = nil
@@ -1796,6 +1805,9 @@ final class CompanionManager: ObservableObject {
         notes: ResearchNotes? = nil
     ) async throws {
         report.modeUsed = "Agent"
+        agentTaskCardPanelManager.show(task: task)
+        var isTaskCardFinished = false
+        defer { if !isTaskCardFinished { agentTaskCardPanelManager.finish(summary: "stopped", succeeded: false) } }
 
         // Unfamiliar app → quick web research first. The plan only feeds the agent's
         // prompt; the user sees a caption, never the sources or the step list.
@@ -1811,6 +1823,21 @@ final class CompanionManager: ObservableObject {
         }
         try Task.checkCancellation()
 
+        // The steps on the card: the approved rehearsal plan, or a fresh plan for
+        // this run. The same plan guides the step-by-step decisions.
+        var plan = approvedPlan ?? []
+        if plan.isEmpty {
+            presentCaption("planning…")
+            let planStartedAt = Date()
+            if let planned = try? await agentModePipeline.plan(task: task, researchNotes: researchNotes?.asPromptText, userContextText: userContextForCurrentInteraction?.promptText,
+                                                                redirect: nil, capture: firstScreenAnalysis.capture, elements: firstScreenAnalysis.elements) {
+                plan = planned.steps
+            }
+            report.planSeconds += Date().timeIntervalSince(planStartedAt)
+            try Task.checkCancellation()
+        }
+        agentTaskCardPanelManager.setPlan(plan.map(\.description))
+
         isActing = true
         defer { isActing = false }
         var screenAnalysis = firstScreenAnalysis
@@ -1825,7 +1852,7 @@ final class CompanionManager: ObservableObject {
             try Task.checkCancellation()
             let decisionStartedAt = Date()
             let action = try await agentModePipeline.decideNextAction(
-                task: task, researchNotes: Self.agentNotes(research: researchNotes, approvedPlan: approvedPlan), userContextText: userContextForCurrentInteraction?.promptText,
+                task: task, researchNotes: Self.agentNotes(research: researchNotes, approvedPlan: plan.isEmpty ? nil : plan), userContextText: userContextForCurrentInteraction?.promptText,
                 stepNumber: stepNumber, history: history,
                 capture: screenAnalysis.capture, elements: screenAnalysis.elements
             )
@@ -1837,6 +1864,8 @@ final class CompanionManager: ObservableObject {
                 // The way out: no guessing. The question or reason is spoken and the loop ends.
                 completionSummary = action.text ?? action.narration
                 history.append("\(stepNumber). \(action.kind.rawValue): \(completionSummary)")
+                agentTaskCardPanelManager.finish(summary: completionSummary, succeeded: false)
+                isTaskCardFinished = true
                 break
             }
 
@@ -1846,6 +1875,7 @@ final class CompanionManager: ObservableObject {
                 // the history and the loop continues.
                 if verificationAttempts < 2 {
                     verificationAttempts += 1
+                    agentTaskCardPanelManager.setStatus("checking the result…")
                     try? await Task.sleep(nanoseconds: 900_000_000)
                     let checkAnalysis = try await makeScreenAnalysisTask().value
                     let verdict = try await agentModePipeline.verifyCompletion(task: task, claimedSummary: action.completionSummary ?? action.narration, capture: checkAnalysis.capture, elements: checkAnalysis.elements)
@@ -1853,15 +1883,29 @@ final class CompanionManager: ObservableObject {
                     if !verdict.isAchieved, stepNumber < AgentModePipeline.maximumSteps {
                         history.append("\(stepNumber). claimed done, but the screen shows: \(verdict.evidence). next: \(verdict.nextHint ?? "keep going")")
                         presentCaption("not there yet…")
+                        agentTaskCardPanelManager.setStatus("not there yet · \(verdict.evidence)")
                         screenAnalysis = checkAnalysis
                         continue
                     }
                     completionSummary = verdict.isAchieved ? (action.completionSummary ?? action.narration) : "i tried, but \(verdict.evidence)"
+                    agentTaskCardPanelManager.finish(summary: completionSummary, succeeded: verdict.isAchieved)
                 } else {
                     completionSummary = action.completionSummary ?? action.narration
+                    agentTaskCardPanelManager.finish(summary: completionSummary, succeeded: true)
                 }
+                isTaskCardFinished = true
                 history.append("done: \(completionSummary)")
                 break
+            }
+
+            // The card follows along: the plan step the model says it is on, else the
+            // next plan step in order, else a new row for an unplanned action.
+            if let planStep = action.planStep, planStep >= 1, planStep <= plan.count {
+                agentTaskCardPanelManager.beginStep(at: planStep - 1)
+            } else if stepNumber <= plan.count {
+                agentTaskCardPanelManager.beginStep(at: stepNumber - 1)
+            } else {
+                agentTaskCardPanelManager.addStep(action.narration)
             }
 
             // Show what is about to happen: caption + buddy flies to the target + highlight.
@@ -1900,6 +1944,7 @@ final class CompanionManager: ObservableObject {
             // the history line, and repeats or dead actions trigger a loop breaker.
             let fingerprint = ScreenHistoryRecorder.signature(of: screenAnalysis.capture.cgImage)
             let changed = ScreenHistoryRecorder.meanAbsoluteDifference(fingerprint, previousFingerprint) >= 3
+                || ScreenHistoryRecorder.changedCellFraction(fingerprint, previousFingerprint) >= 0.008
             previousFingerprint = fingerprint
             if var last = history.popLast() {
                 last += changed ? " → screen changed" : " → no visible change"
@@ -1920,6 +1965,10 @@ final class CompanionManager: ObservableObject {
         report.metricText = "\(history.count) actions\(researchNotes == nil ? "" : " · researched")"
         print("🤖 history:\n  " + history.joined(separator: "\n  "))
         drawingLayerModel.clear()
+        if !isTaskCardFinished {
+            agentTaskCardPanelManager.finish(summary: completionSummary, succeeded: false)
+            isTaskCardFinished = true
+        }
         try await speak(completionSummary)
     }
 
